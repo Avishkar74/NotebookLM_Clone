@@ -35,6 +35,21 @@ export type RagAnswer = {
   retrievalCount: number;
 };
 
+async function fetchWithTimeout(input: RequestInfo, init: RequestInit = {}, ms = 30_000): Promise<Response> {
+  const controller = new AbortController();
+  const id = window.setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiError('Request timed out. Please try again.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(id);
+  }
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = await response.text();
@@ -76,29 +91,29 @@ export async function ingestFile(file: File, userId = 'notebook-user', sessionId
   formData.append('userId', userId);
   formData.append('sessionId', sessionId);
 
-  return parseJson<IngestSummary>(await fetch(`${API_BASE}/ingest/file`, { method: 'POST', body: formData }));
+  return parseJson<IngestSummary>(await fetchWithTimeout(`${API_BASE}/ingest/file`, { method: 'POST', body: formData }, 60_000));
 }
 
 export async function ingestUrl(url: string, userId = 'notebook-user', sessionId = 'default-session'): Promise<IngestSummary> {
   return parseJson<IngestSummary>(
-    await fetch(`${API_BASE}/ingest/url`, {
+    await fetchWithTimeout(`${API_BASE}/ingest/url`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, userId, sessionId }),
-    }),
+    }, 60_000),
   );
 }
 
 export async function previewUrl(url: string): Promise<Record<string, unknown>> {
-  return parseJson<Record<string, unknown>>(await fetch(`${API_BASE}/ingest/url/preview?url=${encodeURIComponent(url)}`));
+  return parseJson<Record<string, unknown>>(await fetchWithTimeout(`${API_BASE}/ingest/url/preview?url=${encodeURIComponent(url)}`, {}, 30_000));
 }
 
 export async function askQuestion(query: string, userId = 'notebook-user', sessionId = 'default-session'): Promise<RagAnswer> {
   return parseJson<RagAnswer>(
-    await fetch(`${API_BASE}/query`, {
+    await fetchWithTimeout(`${API_BASE}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, userId, sessionId }),
-    }),
+    }, 120_000),
   );
 }

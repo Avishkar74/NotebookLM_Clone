@@ -33,6 +33,8 @@ export const jsonRoutes = (container: AppContainer) => {
     });
   });
 
+  const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.mp4', '.mov', '.avi']);
+
   router.post('/ingest/file', upload.single('file'), async (request, response, next) => {
     let tempPath = '';
     try {
@@ -49,13 +51,18 @@ export const jsonRoutes = (container: AppContainer) => {
       await fs.writeFile(tempPath, request.file.buffer);
 
       await container.memoryStore.ensureSession({ userId, sessionId, userName: container.env.defaultUserName });
-      const result = await container.ingestionService.ingestFile({ userId, sessionId, filePath: tempPath, displayName });
+
+      const ext = path.extname(request.file.originalname).toLowerCase();
+      const result = AUDIO_EXTENSIONS.has(ext)
+        ? await container.ingestionService.ingestAudio({ userId, sessionId, filePath: tempPath })
+        : await container.ingestionService.ingestFile({ userId, sessionId, filePath: tempPath, displayName });
+
       response.json(result);
     } catch (error) {
-      next(new AppError('file_ingestion_failed', 500, 'INGESTION_FAILED', 'Source ingestion failed. Please try again.'));
       logger.warn('route_ingest_file_failed', {
         error: error instanceof Error ? error.message : 'unknown_error',
       });
+      next(new AppError('file_ingestion_failed', 500, 'INGESTION_FAILED', 'Source ingestion failed. Please try again.'));
     } finally {
       if (tempPath) {
         await fs.rm(tempPath, { force: true }).catch(() => undefined);
@@ -78,10 +85,10 @@ export const jsonRoutes = (container: AppContainer) => {
       const result = await container.ingestionService.ingestUrl({ userId, sessionId, url });
       response.json(result);
     } catch (error) {
-      next(new AppError('url_ingestion_failed', 500, 'INGESTION_FAILED', 'Source ingestion failed. Please try again.'));
       logger.warn('route_ingest_url_failed', {
         error: error instanceof Error ? error.message : 'unknown_error',
       });
+      next(new AppError('url_ingestion_failed', 500, 'INGESTION_FAILED', 'Source ingestion failed. Please try again.'));
     }
   });
 
@@ -124,10 +131,10 @@ export const jsonRoutes = (container: AppContainer) => {
 
       response.json(await container.ingestionService.previewUrl(url));
     } catch (error) {
-      logger.warn('route_query_failed', {
+      logger.warn('route_preview_failed', {
         error: error instanceof Error ? error.message : 'unknown_error',
       });
-      next(new AppError('query_failed', 500, 'QUERY_FAILED', 'Unable to generate a response right now.'));
+      next(new AppError('preview_failed', 500, 'INGESTION_FAILED', 'Unable to preview this URL right now.'));
     }
   });
 
