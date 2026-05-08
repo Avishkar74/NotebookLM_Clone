@@ -1,1 +1,13 @@
 .env
+python_ref/
+node_modules/
+dist/
+coverage/
+.vite/
+.turbo/
+server/dist/
+client/dist/
+server/node_modules/
+client/node_modules/
+*.tsbuildinfo
+server/tests/*.js

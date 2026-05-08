@@ -1,0 +1,1 @@
+Embedding fallback should not crash ingestion path.

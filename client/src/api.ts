@@ -1,0 +1,104 @@
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000/api';
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+export type IngestSummary = {
+  id: string;
+  name: string;
+  sourceType: string;
+  chunkCount: number;
+  vectorIds: string[];
+  warnings?: string[];
+};
+
+export type RagAnswer = {
+  query: string;
+  response: string;
+  mode?: 'chat' | 'rag';
+  warnings?: string[];
+  sourcesUsed: Array<{
+    reference: string;
+    sourceFile: string;
+    sourceType: string;
+    pageNumber?: number | null;
+    chunkId: string;
+    relevanceScore: number;
+  }>;
+  retrievalCount: number;
+};
+
+async function parseJson<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const text = await response.text();
+    let payload: { error?: string; code?: string } | null = null;
+
+    try {
+      payload = text ? (JSON.parse(text) as { error?: string; code?: string }) : null;
+    } catch {
+      payload = null;
+    }
+
+    const defaultMessage = mapHttpStatusToMessage(response.status);
+    const message = payload?.error || defaultMessage;
+    throw new ApiError(message, payload?.code);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+function mapHttpStatusToMessage(status: number): string {
+  if (status === 400) {
+    return 'The request is invalid. Please check your input.';
+  }
+
+  if (status === 404) {
+    return 'The requested resource could not be found.';
+  }
+
+  if (status >= 500) {
+    return 'The server is temporarily unavailable. Please try again.';
+  }
+
+  return `Request failed with status ${status}`;
+}
+
+export async function ingestFile(file: File, userId = 'notebook-user', sessionId = 'default-session'): Promise<IngestSummary> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('userId', userId);
+  formData.append('sessionId', sessionId);
+
+  return parseJson<IngestSummary>(await fetch(`${API_BASE}/ingest/file`, { method: 'POST', body: formData }));
+}
+
+export async function ingestUrl(url: string, userId = 'notebook-user', sessionId = 'default-session'): Promise<IngestSummary> {
+  return parseJson<IngestSummary>(
+    await fetch(`${API_BASE}/ingest/url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, userId, sessionId }),
+    }),
+  );
+}
+
+export async function previewUrl(url: string): Promise<Record<string, unknown>> {
+  return parseJson<Record<string, unknown>>(await fetch(`${API_BASE}/ingest/url/preview?url=${encodeURIComponent(url)}`));
+}
+
+export async function askQuestion(query: string, userId = 'notebook-user', sessionId = 'default-session'): Promise<RagAnswer> {
+  return parseJson<RagAnswer>(
+    await fetch(`${API_BASE}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, userId, sessionId }),
+    }),
+  );
+}
