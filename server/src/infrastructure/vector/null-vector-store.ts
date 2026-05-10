@@ -7,10 +7,12 @@ export class NullVectorStore implements VectorStore {
   }
 
   public async upsert(_chunks: EmbeddedChunk[]): Promise<string[]> {
+    console.warn('NullVectorStore: upsert called but no vector store is configured.');
     return [];
   }
 
-  public async search(_queryVector: number[], _limit: number): Promise<RetrievedChunk[]> {
+  public async search(_queryVector: number[], _limit: number, _filter?: { sessionId?: string; sourceFiles?: string[] }): Promise<RetrievedChunk[]> {
+    console.warn('NullVectorStore: search called but no vector store is configured.');
     return [];
   }
 

@@ -86,7 +86,7 @@ function mapHttpStatusToMessage(status: number): string {
   return `Request failed with status ${status}`;
 }
 
-export async function ingestFile(file: File, userId = 'notebook-user', sessionId = 'default-session'): Promise<IngestSummary> {
+export async function ingestFile(file: File, userId: string, sessionId: string): Promise<IngestSummary> {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('userId', userId);
@@ -95,7 +95,7 @@ export async function ingestFile(file: File, userId = 'notebook-user', sessionId
   return parseJson<IngestSummary>(await fetchWithTimeout(`${API_BASE}/ingest/file`, { method: 'POST', body: formData }, 60_000));
 }
 
-export async function ingestUrl(url: string, userId = 'notebook-user', sessionId = 'default-session'): Promise<IngestSummary> {
+export async function ingestUrl(url: string, userId: string, sessionId: string): Promise<IngestSummary> {
   return parseJson<IngestSummary>(
     await fetchWithTimeout(`${API_BASE}/ingest/url`, {
       method: 'POST',
@@ -129,7 +129,7 @@ export async function askQuestion(
   );
 }
 
-export async function ingestText(text: string, title: string, userId = 'notebook-user', sessionId = 'default-session'): Promise<IngestSummary> {
+export async function ingestText(text: string, title: string, userId: string, sessionId: string): Promise<IngestSummary> {
   return parseJson<IngestSummary>(
     await fetchWithTimeout(`${API_BASE}/ingest/text`, {
       method: 'POST',

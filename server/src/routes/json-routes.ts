@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import crypto from 'node:crypto';
 import multer from 'multer';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -48,7 +49,7 @@ export const jsonRoutes = (container: AppContainer) => {
       const sessionId = String(request.body.sessionId ?? container.env.defaultSessionId);
       const displayName = request.body.displayName ? String(request.body.displayName) : request.file.originalname;
 
-      tempPath = path.join(os.tmpdir(), `${Date.now()}-${request.file.originalname}`);
+      tempPath = path.join(os.tmpdir(), `${crypto.randomUUID()}-${request.file.originalname}`);
       await fs.writeFile(tempPath, request.file.buffer);
 
       await container.memoryStore.ensureSession({ userId, sessionId, userName: container.env.defaultUserName });

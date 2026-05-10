@@ -25,18 +25,30 @@ export class LocalDocumentLoader implements DocumentLoader {
       const buffer = await fs.readFile(absolutePath);
       const pdfParseModule = await import('pdf-parse');
       const pdfParse: any = pdfParseModule.default;
-      const pdf = await pdfParse(buffer);
-      const pages = pdf.text.split(/\f+/g);
-      const chunks: DocumentChunk[] = [];
 
-      pages.forEach((pageText: string, index: number) => {
+      const pageTexts: string[] = [];
+      const pdf = await pdfParse(buffer, {
+        pagerender: async (pageData: any) => {
+          const textContent = await pageData.getTextContent();
+          const text = textContent.items.map((item: any) => item.str).join(' ');
+          pageTexts.push(text);
+          return text;
+        },
+      });
+
+      const rawPages = pageTexts.length > 0
+        ? pageTexts
+        : pdf.text.split(/\f+/g).filter((p: string) => p.trim().length > 0);
+
+      const chunks: DocumentChunk[] = [];
+      rawPages.forEach((pageText: string, index: number) => {
         const pageChunks = this.chunker.chunk({
-          text: pageText,
+          text: pageText.trim(),
           sourceFile: path.basename(absolutePath),
           sourceType: 'pdf',
           pageNumber: index + 1,
           metadata: {
-            totalPages: pages.length,
+            totalPages: rawPages.length,
             fileSize: stats.size,
             parsedAt: new Date().toISOString(),
           },
@@ -44,7 +56,7 @@ export class LocalDocumentLoader implements DocumentLoader {
         chunks.push(...pageChunks);
       });
 
-      return chunks;
+      return chunks.filter((c) => c.content.trim().length > 20); // drop noise chunks
     }
 
     if (sourceType === 'csv') {

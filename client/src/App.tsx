@@ -673,6 +673,8 @@ export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [userApiKey, setUserApiKey] = useState('');
+  const [userId] = useState(() => `user-${createId()}`);
+  const [sessionId] = useState(() => `sess-${createId()}`);
 
   const pushToast = (message: string, kind: Toast['kind']) => {
     const id = createId();
@@ -711,7 +713,7 @@ export default function App() {
     setUploading(true);
     setStatus(`Uploading ${file.name}...`);
     try {
-      const summary = await ingestFile(file);
+      const summary = await ingestFile(file, userId, sessionId);
       appendSource(summary);
       setStatus(`Indexed ${summary.chunkCount} chunks from ${summary.name}`);
       pushToast('Source added successfully.', 'success');
@@ -728,7 +730,7 @@ export default function App() {
     setUploading(true);
     setStatus('Scraping and indexing URL...');
     try {
-      const summary = await ingestUrl(url);
+      const summary = await ingestUrl(url, userId, sessionId);
       appendSource(summary);
       setStatus(`Indexed ${summary.chunkCount} chunks from ${summary.name}`);
       pushToast('URL source added.', 'success');
@@ -745,7 +747,7 @@ export default function App() {
     setUploading(true);
     setStatus('Indexing text...');
     try {
-      const summary = await ingestText(text, title);
+      const summary = await ingestText(text, title, userId, sessionId);
       appendSource(summary);
       setStatus(`Indexed ${summary.chunkCount} chunks`);
       pushToast('Text source added.', 'success');
@@ -774,8 +776,8 @@ export default function App() {
     ]);
 
     try {
-      const selectedSourceFiles = sources.filter((s) => s.selected).map((s) => s.name);
-      const result = await askQuestion(query, 'notebook-user', 'default-session', userApiKey, selectedSourceFiles);
+      const selectedSourceFiles = sources.filter((s) => s.selected).map((s) => s.id); // FIXED: use .id (sourceId)
+      const result = await askQuestion(query, userId, sessionId, userApiKey, selectedSourceFiles);
       setMessages((current) =>
         current.map((message) =>
           message.id === messageId

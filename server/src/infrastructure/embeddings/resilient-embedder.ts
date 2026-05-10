@@ -29,20 +29,15 @@ export class ResilientEmbedder implements Embedder {
     try {
       const result = await this.primary.embedQuery(text);
       if (this.lastDocumentEmbedder === 'fallback') {
-        logger.warn('embedder_mismatch_docs_used_fallback_query_used_primary', {
-          message: 'Documents were embedded with fallback but query is using primary. Retrieval results may be unreliable.',
-        });
+        // FIXED: Hard switch to fallback if docs used it, otherwise similarity is 0
+        logger.warn('embedder_mismatch_forcing_fallback_for_query_consistency');
+        return this.fallback.embedQuery(text);
       }
       return result;
     } catch (error) {
       logger.warn('primary_embed_query_failed_using_fallback', {
         error: error instanceof Error ? error.message : 'unknown_error',
       });
-      if (this.lastDocumentEmbedder === 'primary') {
-        logger.warn('embedder_mismatch_docs_used_primary_query_used_fallback', {
-          message: 'Documents were embedded with primary but query is using fallback. Retrieval results may be unreliable.',
-        });
-      }
       return this.fallback.embedQuery(text);
     }
   }
