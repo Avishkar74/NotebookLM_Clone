@@ -2,7 +2,7 @@ import type { Embedder, LLMClient, MemoryStore, VectorStore } from '../domain/po
 import type { RagAnswer, RetrievedChunk, RagSource } from '../domain/models.js';
 import { logger } from '../utils/logger.js';
 
-const MINIMUM_RETRIEVAL_SCORE = 0.30; // discard low-relevance chunks
+const MINIMUM_RETRIEVAL_SCORE = 0.20; // Lowered from 0.30 to ensure better recall for short queries
 const MAX_MEMORY_CHARS = 1500;        // cap memory context to protect source context budget
 
 export class RagPipeline {

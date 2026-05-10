@@ -103,17 +103,16 @@ export class MilvusVectorStore implements VectorStore {
 
     const filters: string[] = [];
 
-    if (filter?.sessionId) {
-      filters.push(`session_id == "${filter.sessionId}"`);
-    }
-
-    // FIXED: filter on source_id (stable canonical ID) instead of source_file (display name)
+    // If specific sources are requested, we filter ONLY by those sources to allow cross-session retrieval.
+    // If no sources are specified, we fall back to session-wide search.
     if (Array.isArray(filter?.sourceFiles) && filter.sourceFiles.length > 0) {
       const safeIds = filter.sourceFiles
         .map((f) => f.replace(/\\/g, '\\\\').replace(/"/g, '\\"'))
         .map((f) => `"${f}"`)
         .join(', ');
       filters.push(`source_id in [${safeIds}]`);
+    } else if (filter?.sessionId) {
+      filters.push(`session_id == "${filter.sessionId}"`);
     }
 
     if (filters.length > 0) {
