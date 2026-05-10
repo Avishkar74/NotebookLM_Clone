@@ -17,6 +17,7 @@ export type IngestSummary = {
   chunkCount: number;
   vectorIds: string[];
   warnings?: string[];
+  state: string;
 };
 
 export type RagAnswer = {
@@ -34,6 +35,8 @@ export type RagAnswer = {
   }>;
   retrievalCount: number;
   embedderStatus?: 'primary' | 'fallback';
+  groundingLevel?: string;
+  attribution?: Array<{ statement: string; source: string }>;
 };
 
 async function fetchWithTimeout(input: RequestInfo, init: RequestInit = {}, ms = 30_000): Promise<Response> {

@@ -26,6 +26,7 @@ export interface SourceAwareMemoryStore extends MemoryStore {
 
 export class HybridMemoryStore implements SourceAwareMemoryStore {
   private readonly turns = new Map<string, MemoryTurn[]>();
+  private readonly metadataStore = new Map<string, Record<string, unknown>>();
 
   constructor(private readonly zepApiKey?: string, private readonly baseUrl = 'https://api.getzep.com/api/v2') {}
 
@@ -92,6 +93,9 @@ export class HybridMemoryStore implements SourceAwareMemoryStore {
   }
 
   public async saveMetadata(input: { userId: string; sessionId: string; label: string; payload: Record<string, unknown> }): Promise<void> {
+    const key = `${input.sessionId}:${input.payload.sourceId ?? input.label}`;
+    this.metadataStore.set(key, input.payload);
+
     if (!this.zepApiKey) {
       return;
     }
@@ -101,6 +105,11 @@ export class HybridMemoryStore implements SourceAwareMemoryStore {
       type: 'text',
       data: JSON.stringify({ label: input.label, sessionId: input.sessionId, payload: input.payload }),
     });
+  }
+
+  public async getMetadata(input: { userId: string; sessionId: string; sourceId: string }): Promise<Record<string, unknown> | null> {
+    const key = `${input.sessionId}:${input.sourceId}`;
+    return this.metadataStore.get(key) ?? null;
   }
 
   // FIXED: filter memory turns to only include those from the same source selection context

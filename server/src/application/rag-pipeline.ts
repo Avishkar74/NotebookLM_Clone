@@ -1,9 +1,10 @@
 import type { Embedder, LLMClient, MemoryStore, VectorStore } from '../domain/ports.js';
 import type { RagAnswer, RetrievedChunk, RagSource } from '../domain/models.js';
+import { GroundingLevel, SourceState } from '../domain/models.js';
 import { logger } from '../utils/logger.js';
 
-const MINIMUM_RETRIEVAL_SCORE = 0.20; // Lowered from 0.30 to ensure better recall for short queries
-const MAX_MEMORY_CHARS = 1500;        // cap memory context to protect source context budget
+const MINIMUM_RETRIEVAL_SCORE = 0.20; 
+const MAX_MEMORY_CHARS = 1500;        
 
 export class RagPipeline {
   constructor(
@@ -23,86 +24,81 @@ export class RagPipeline {
     llmClient?: LLMClient;
     sourceFiles?: string[];
   }): Promise<RagAnswer> {
-    const query = input.query.trim();
-    if (!query) {
-      return {
-        query: input.query,
-        response: 'Please provide a valid question.',
-        sourcesUsed: [],
-        retrievalCount: 0,
-        mode: 'chat',
-      };
-    }
-
+    const { userId, sessionId, query, sourceFiles } = input;
     const warnings: string[] = [];
 
-    // FIXED: strict distinction between "all sources" (undefined) and "no sources" ([])
-    const searchResults = await this.tryRetrieve(
-      query,
-      input.sessionId,
-      input.topK ?? 10,
-      warnings,
-      input.sourceFiles,
-    );
-
-    // Apply score threshold and MMR diversity
-    const filteredResults = searchResults.filter((r) => r.score >= MINIMUM_RETRIEVAL_SCORE);
-    const diverseResults = this.applyMMR(filteredResults, 0.7, input.maxChunks ?? 8);
-    const hasContext = diverseResults.length > 0;
-
-    const { context, sources } = this.formatContext(
-      diverseResults,
-      input.maxChunks ?? 8,
-      input.maxContextChars ?? 3500,
-    );
-
-    // FIXED: memory context is source-aware and capped to prevent contamination
-    let memoryContext = '';
-    try {
-      memoryContext = await this.memoryStore.getContext({
-        userId: input.userId,
-        sessionId: input.sessionId,
-        activeSourceFiles: input.sourceFiles,
-      });
-      // Cap memory context length
-      if (memoryContext.length > MAX_MEMORY_CHARS) {
-        memoryContext = memoryContext.slice(-MAX_MEMORY_CHARS);
+    // 1. Fetch metadata and evaluate grounding readiness
+    const selectedSourcesMetadata: Array<{ id: string; name: string; state: SourceState }> = [];
+    if (sourceFiles && sourceFiles.length > 0) {
+      for (const id of sourceFiles) {
+        try {
+          const meta = await this.memoryStore.getMetadata({ userId, sessionId, sourceId: id });
+          const parts = id.split('::');
+          const name = parts.length > 1 ? parts[1] : id;
+          selectedSourcesMetadata.push({
+            id,
+            name,
+            state: (meta?.state as SourceState) ?? SourceState.RETRIEVAL_READY,
+          });
+        } catch (error) {
+          logger.warn('metadata_fetch_failed', { id, error });
+        }
       }
-    } catch (error) {
-      logger.warn('memory_context_lookup_failed', {
-        error: error instanceof Error ? error.message : 'unknown_error',
-      });
     }
 
-    // FIXED: Parse stable IDs back to display names for the LLM
-    const selectedSourcesMetadata = input.sourceFiles?.map(id => {
-      const parts = id.split('::');
-      return {
-        id,
-        name: parts.length > 1 ? parts[1] : id,
-      };
-    }) ?? [];
+    const failedSources = selectedSourcesMetadata.filter(s => s.state === SourceState.EMBEDDING_FAILED);
+    if (failedSources.length > 0) {
+      warnings.push(`The following sources have failed embeddings and cannot be used for semantic search: ${failedSources.map(s => s.name).join(', ')}`);
+    }
 
-    const sourceListString = selectedSourcesMetadata.map(s => `- ${s.name}`).join('\n');
+    // 2. Intent Classification
+    const isMetadataQuery = /what (are|is|in) (your |the |my |)sources|assignments|files|uploaded|index/i.test(query);
+    
+    // 3. Retrieval Orchestration
+    let searchResults: RetrievedChunk[] = [];
+    let groundingLevel = GroundingLevel.NO_SOURCES;
 
-    // HEURISTIC: Detect if user is asking about the sources themselves
-    const isMetadataQuery = /what (are|is|in) (your |the |my |)sources|assignments|files|uploaded/i.test(query);
+    if (selectedSourcesMetadata.length > 0) {
+      groundingLevel = GroundingLevel.METADATA_ONLY;
+      
+      // Only perform vector search if we have valid sources and it's not a pure metadata query
+      const hasReadySources = selectedSourcesMetadata.some(s => s.state === SourceState.RETRIEVAL_READY);
+      if (!isMetadataQuery && hasReadySources) {
+        searchResults = await this.tryRetrieve(query, sessionId, input.topK ?? 10, warnings, sourceFiles);
+      }
+    }
 
-    const prompt = hasContext
-      ? `You are a source-grounded AI assistant. You have access to both document metadata and specific retrieved passages.
+    const diverseResults = this.applyMMR(searchResults, 0.6, input.maxChunks ?? 8);
+    const { context, sources } = this.formatContext(diverseResults, input.maxChunks ?? 8, input.maxContextChars ?? 4000);
+    const hasContext = diverseResults.length > 0;
 
-[SELECTED DOCUMENTS — Metadata Only]
+    if (hasContext) {
+      groundingLevel = diverseResults.some(r => r.score > 0.6) 
+        ? GroundingLevel.STRONG_GROUNDED_CONTEXT 
+        : GroundingLevel.CHUNKS_RETRIEVED;
+    }
+
+    // 4. Memory/History
+    const memoryContext = await this.memoryStore.getContext({ userId, sessionId, activeSourceFiles: sourceFiles });
+
+    // 5. Prompt Engineering with Attribution Tracking
+    const sourceListString = selectedSourcesMetadata.map(s => `- ${s.name} [State: ${s.state}]`).join('\n');
+
+    const prompt = `You are a professional research assistant (NotebookLM Clone). Your goal is to provide STRICTLY grounded answers based on the provided documents.
+
+[SELECTED DOCUMENTS — Metadata Only Knowledge]
 ${sourceListString || 'None selected.'}
 
-[RETRIEVED PASSAGES — Specific Details]
-${context}
+[RETRIEVED PASSAGES — Content Knowledge]
+${context || 'No matching passages retrieved for this query.'}
 
 STRICT GROUNDING RULES:
-1. Use [RETRIEVED PASSAGES] for detailed factual answers.
-2. Use [SELECTED DOCUMENTS] to acknowledge the existence of files even if specific details aren't in the passages.
-3. If the query asks "what are my sources" or "what is in the files", use both metadata and passages to provide a complete answer.
-4. Cite passages using [1], [2], etc.
-5. If you mention a document name from the metadata that lacks retrieved passages, be transparent: "I see 'Filename' is selected, but no detailed passages were retrieved for this specific question."
+1. If sources are selected but no passages are retrieved, NEVER speculate about the content from the filename.
+2. If you see "Assignment 03 — Google NotebookLM RAG.pdf" but no passages exist, respond: "I can see this assignment is in your notebook, but I haven't retrieved any matching content from inside it yet."
+3. DO NOT use pretrained knowledge to fill gaps. If the document says nothing about a topic, say you don't know.
+4. If you use information from the [SELECTED DOCUMENTS] list (like the title), label it as "From Metadata".
+5. If you use information from the [RETRIEVED PASSAGES] list, cite it using [1], [2], etc.
+6. PROHIBITED: "This assignment likely involves...", "This sounds like...", "Based on my general knowledge...".
 
 [CONVERSATION HISTORY — Tone reference only]
 ${memoryContext || 'No prior conversation.'}
@@ -110,64 +106,38 @@ ${memoryContext || 'No prior conversation.'}
 [QUESTION]
 ${query}
 
-[ANSWER]`
-      : `You are a research assistant. No specific text passages were retrieved for this query, but you are aware of the following selected documents.
-
-[SELECTED DOCUMENTS — Metadata Only]
-${sourceListString || 'None selected.'}
-
-STRICT RULES:
-1. NEVER claim you cannot access or view the documents listed above. 
-2. Acknowledge that these files are in your active notebook.
-3. Since no specific passages were found, explain that while you see the files "${selectedSourcesMetadata.map(s => s.name).join(', ')}", the current query did not return matching content from inside them.
-4. You may provide a general overview based on the filenames or your general knowledge of those topics, but explicitly label it as "General Knowledge" or "Inference from Title".
-
-[CONVERSATION HISTORY]
-${memoryContext || 'No prior conversation.'}
-
-[QUESTION]
-${query}
-
-[ANSWER]`;
+[ANSWER — Be concise and factual]`;
 
     const activeLlmClient = input.llmClient ?? this.defaultLlmClient;
     let response = '';
     try {
       response = await activeLlmClient.generate(prompt, { maxTokens: 2000 });
     } catch (error) {
-      logger.error('llm_generation_failed', {
-        error: error instanceof Error ? error.message : 'unknown_error',
-      });
+      logger.error('llm_generation_failed', { error: error instanceof Error ? error.message : 'unknown_error' });
       response = this.buildOfflineFallbackAnswer(query, diverseResults);
-      warnings.push('Chat generation is temporarily unavailable.');
+      warnings.push('LLM generation failed.');
     }
 
-    const isSourceGrounded = (input.sourceFiles?.length ?? 0) > 0;
     const ragAnswer: RagAnswer = {
       query,
       response,
-      sourcesUsed: hasContext ? sources : [],
+      sourcesUsed: sources,
       retrievalCount: searchResults.length,
-      mode: hasContext || isSourceGrounded ? 'rag' : 'chat',
+      mode: (selectedSourcesMetadata.length > 0) ? 'rag' : 'chat',
       warnings,
       embedderStatus: this.getEmbedderStatus(),
+      groundingLevel,
     };
 
-    // FIXED: saveTurn now includes active source files so memory can be source-scoped
-    try {
-      await this.memoryStore.saveTurn({
-        userId: input.userId,
-        sessionId: input.sessionId,
-        query,
-        response,
-        sourcesUsed: hasContext ? sources : [],
-        activeSourceFiles: input.sourceFiles ?? [],
-      });
-    } catch (error) {
-      logger.warn('memory_turn_save_failed', {
-        error: error instanceof Error ? error.message : 'unknown_error',
-      });
-    }
+    // 6. Persistence
+    await this.memoryStore.saveTurn({
+      userId,
+      sessionId,
+      query,
+      response,
+      sourcesUsed: sources,
+      activeSourceFiles: sourceFiles,
+    });
 
     return ragAnswer;
   }
@@ -178,13 +148,16 @@ ${query}
     topK?: number;
     summaryLength?: 'short' | 'medium' | 'long';
     llmClient?: LLMClient;
-    sourceFiles?: string[];   // FIXED: was missing
+    sourceFiles?: string[];
   }): Promise<RagAnswer> {
-    const searchResults = await this.vectorStore.search(
-      await this.embedder.embedQuery('main topics key findings important information overview'),
+    const searchResults = await this.tryRetrieve(
+      'main topics key findings important information overview summary',
+      input.sessionId,
       input.topK ?? 15,
-      { sessionId: input.sessionId, sourceFiles: input.sourceFiles }, // FIXED: pass sourceFiles
+      [],
+      input.sourceFiles
     );
+
     if (!searchResults.length) {
       return {
         query: 'Document Summary',
@@ -258,7 +231,6 @@ Summary:`;
     };
   }
 
-  // FIXED: explicit distinction between undefined (search all) and [] (no sources, return empty)
   private async tryRetrieve(
     query: string,
     sessionId: string,
@@ -266,7 +238,6 @@ Summary:`;
     warnings: string[],
     sourceFiles?: string[],
   ): Promise<RetrievedChunk[]> {
-    // Explicitly empty array means "no sources selected" — return nothing
     if (Array.isArray(sourceFiles) && sourceFiles.length === 0) {
       return [];
     }
@@ -277,18 +248,14 @@ Summary:`;
       if (Array.isArray(sourceFiles) && sourceFiles.length > 0) {
         filter.sourceFiles = sourceFiles;
       }
-      const results = await this.vectorStore.search(queryVector, topK, filter);
-      return results;
+      return await this.vectorStore.search(queryVector, topK, filter);
     } catch (error) {
-      logger.warn('retrieval_path_failed_falling_back_to_chat', {
-        error: error instanceof Error ? error.message : 'unknown_error',
-      });
-      warnings.push('Retrieval is unavailable right now. Responding in chat mode.');
+      logger.warn('retrieval_failed', { error });
+      warnings.push('Retrieval is unavailable right now.');
       return [];
     }
   }
 
-  // MMR: Maximal Marginal Relevance — balance relevance vs diversity
   private applyMMR(results: RetrievedChunk[], lambda = 0.7, topK = 8): RetrievedChunk[] {
     if (results.length <= topK) return results;
 

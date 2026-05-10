@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { AudioTranscriber, Chunker, DocumentLoader, Embedder, MemoryStore, VectorStore, WebLoader } from '../domain/ports.js';
+import { DocumentChunk, SourceState } from '../domain/models.js';
 import type { IngestSummary } from '../domain/models.js';
-import { DocumentChunk } from '../domain/models.js';
 import { logger } from '../utils/logger.js';
 
 export class IngestionService {
@@ -15,8 +15,6 @@ export class IngestionService {
     private readonly chunker: Chunker,
   ) {}
 
-  // ─── FIXED: sourceId is now stable and matches what is stored in the vector DB ───
-
   public async ingestText(input: { userId: string; sessionId: string; text: string; title: string }): Promise<IngestSummary> {
     const chunks = this.chunker.chunk({
       text: input.text,
@@ -28,10 +26,9 @@ export class IngestionService {
       },
     });
 
-    // FIX: sourceId is prefixed, session-scoped, and stable — matches filter in vector DB
     const sourceId = `text::${input.title}::${input.sessionId}`;
 
-    const { vectorIds, warnings } = await this.embedAndStore(chunks, {
+    const { vectorIds, warnings, state } = await this.embedAndStore(chunks, {
       sourceType: 'file',
       sourceName: input.title,
       sessionId: input.sessionId,
@@ -46,27 +43,27 @@ export class IngestionService {
         sourceId,
         title: input.title,
         chunkCount: chunks.length,
+        state,
       },
     });
 
     return {
-      id: sourceId,       // ← FIXED: matches source_id in Milvus
+      id: sourceId,
       name: input.title,
       sourceType: 'txt',
       chunkCount: chunks.length,
       vectorIds,
       warnings,
+      state,
     };
   }
 
   public async ingestFile(input: { userId: string; sessionId: string; filePath: string; displayName?: string }): Promise<IngestSummary> {
     const chunks = await this.documentLoader.load(input.filePath);
     const sourceName = input.displayName ?? path.basename(input.filePath);
-
-    // FIX: stable ID derived from name + session, not from a deleted temp path
     const sourceId = `file::${sourceName}::${input.sessionId}`;
 
-    const { vectorIds, warnings } = await this.embedAndStore(chunks, {
+    const { vectorIds, warnings, state } = await this.embedAndStore(chunks, {
       sourceType: 'file',
       sourceName,
       sessionId: input.sessionId,
@@ -82,27 +79,27 @@ export class IngestionService {
         name: sourceName,
         chunkCount: chunks.length,
         sourceType: chunks[0]?.sourceType ?? 'txt',
+        state,
       },
     });
 
     return {
-      id: sourceId,       // ← FIXED: stable, matches source_id in Milvus
+      id: sourceId,
       name: sourceName,
       sourceType: chunks[0]?.sourceType ?? 'txt',
       chunkCount: chunks.length,
       vectorIds,
       warnings,
+      state,
     };
   }
 
   public async ingestUrl(input: { userId: string; sessionId: string; url: string }): Promise<IngestSummary> {
     const chunks = await this.webLoader.load(input.url);
     const urlSourceName = chunks[0]?.sourceFile ?? new URL(input.url).hostname;
-
-    // FIX: use the URL itself as the stable identifier (the display name can be ambiguous)
     const sourceId = `url::${input.url}::${input.sessionId}`;
 
-    const { vectorIds, warnings } = await this.embedAndStore(chunks, {
+    const { vectorIds, warnings, state } = await this.embedAndStore(chunks, {
       sourceType: 'url',
       sourceName: urlSourceName,
       sessionId: input.sessionId,
@@ -118,16 +115,18 @@ export class IngestionService {
         url: input.url,
         title: urlSourceName,
         chunkCount: chunks.length,
+        state,
       },
     });
 
     return {
-      id: sourceId,       // ← FIXED: matches source_id in Milvus
+      id: sourceId,
       name: urlSourceName,
       sourceType: 'web',
       chunkCount: chunks.length,
       vectorIds,
       warnings,
+      state,
     };
   }
 
@@ -136,7 +135,7 @@ export class IngestionService {
     const audioName = path.basename(input.filePath);
     const sourceId = `audio::${audioName}::${input.sessionId}`;
 
-    const { vectorIds, warnings } = await this.embedAndStore(chunks, {
+    const { vectorIds, warnings, state } = await this.embedAndStore(chunks, {
       sourceType: 'audio',
       sourceName: audioName,
       sessionId: input.sessionId,
@@ -152,6 +151,7 @@ export class IngestionService {
         name: audioName,
         chunkCount: chunks.length,
         sourceType: 'audio',
+        state,
       },
     });
 
@@ -162,6 +162,7 @@ export class IngestionService {
       chunkCount: chunks.length,
       vectorIds,
       warnings,
+      state,
     };
   }
 
@@ -172,10 +173,9 @@ export class IngestionService {
   private async embedAndStore(
     chunks: Awaited<ReturnType<DocumentLoader['load']>>,
     metadata: { sourceType: 'file' | 'url' | 'audio'; sourceName: string; sessionId?: string; sourceId: string },
-  ): Promise<{ vectorIds: string[]; warnings: string[] }> {
+  ): Promise<{ vectorIds: string[]; warnings: string[]; state: SourceState }> {
     const warnings: string[] = [];
 
-    // Stamp every chunk with the stable sourceId in its metadata
     const stampedChunks = chunks.map(
       (chunk) =>
         new DocumentChunk(
@@ -194,15 +194,19 @@ export class IngestionService {
     try {
       const embeddedChunks = await this.embedder.embedDocuments(stampedChunks, metadata.sessionId);
       const vectorIds = await this.vectorStore.upsert(embeddedChunks);
-      return { vectorIds, warnings };
+      return { vectorIds, warnings, state: SourceState.RETRIEVAL_READY };
     } catch (error) {
-      logger.warn('ingestion_embedding_or_vector_failed', {
+      logger.error('ingestion_embedding_or_vector_failed', {
         sourceType: metadata.sourceType,
         sourceName: metadata.sourceName,
         error: error instanceof Error ? error.message : 'unknown_error',
       });
-      warnings.push('Unable to generate embeddings right now. Source metadata was saved, but retrieval may be limited.');
-      return { vectorIds: [], warnings };
+      // CRITICAL: return EMBEDDING_FAILED state so frontend can disable querying
+      return {
+        vectorIds: [],
+        warnings: ['Unable to generate embeddings right now. Source metadata was saved, but retrieval may be limited.'],
+        state: SourceState.EMBEDDING_FAILED,
+      };
     }
   }
 }

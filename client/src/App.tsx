@@ -12,6 +12,7 @@ type SourceCard = {
   chunkCount: number;
   vectorIds: string[];
   selected: boolean;
+  state?: string;
 };
 
 type ChatMessage = {
@@ -21,6 +22,8 @@ type ChatMessage = {
   sourcesUsed: RagAnswer['sourcesUsed'];
   isStreaming: boolean;
   embedderStatus?: 'primary' | 'fallback';
+  groundingLevel?: string;
+  attribution?: Array<{ statement: string; source: string }>;
 };
 
 type Toast = {
@@ -137,7 +140,10 @@ const SourcesPanel = memo(function SourcesPanel({
               <div className="source-card-info">
                 <div className="source-card-name">{source.name}</div>
                 <div className="source-card-meta">
-                  {source.kind.toUpperCase()} · {source.chunkCount} chunk{source.chunkCount === 1 ? '' : 's'}
+                  {source.kind.toUpperCase()} · {source.chunkCount} chunks
+                  {source.state === 'embedding_failed' && (
+                    <span className="source-state-error"> (⚠️ Indexing Failed)</span>
+                  )}
                 </div>
               </div>
             </button>
@@ -537,9 +543,17 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMe
         </div>
         <div className="ai-content">
           <div className="ai-meta-row">
-            {message.embedderStatus && (
-              <div className={`embedder-indicator ${message.embedderStatus}`}>
-                {message.embedderStatus === 'primary' ? '⚡ Primary Search' : '⚠️ Fallback Search'}
+            {message.groundingLevel && (
+              <div className={`grounding-indicator ${message.groundingLevel}`}>
+                {message.groundingLevel === 'strong_grounded_context' && '🛡️ Strong Grounding'}
+                {message.groundingLevel === 'chunks_retrieved' && '⚡ Context Retrieved'}
+                {message.groundingLevel === 'metadata_only' && '⚠️ Metadata Only'}
+                {message.groundingLevel === 'no_sources' && '🌐 General Knowledge'}
+              </div>
+            )}
+            {message.embedderStatus && message.embedderStatus === 'fallback' && (
+              <div className="embedder-indicator fallback">
+                ⚠️ Search Limited
               </div>
             )}
           </div>
@@ -708,6 +722,7 @@ export default function App() {
         chunkCount: summary.chunkCount,
         vectorIds: summary.vectorIds,
         selected: true,
+        state: summary.state,
       },
       ...current.filter((item) => item.id !== summary.id),
     ]);
@@ -801,12 +816,20 @@ export default function App() {
                 sourcesUsed: result.sourcesUsed,
                 isStreaming: false,
                 embedderStatus: result.embedderStatus,
+                groundingLevel: result.groundingLevel,
+                attribution: result.attribution,
               }
             : message,
         ),
       );
       result.warnings?.forEach((warning) => pushToast(warning, 'info'));
-      setStatus(result.mode === 'rag' ? 'Answered using sources.' : 'Answered in chat mode.');
+      const statusMap: Record<string, string> = {
+        strong_grounded_context: 'Answered with strong grounding.',
+        chunks_retrieved: 'Answered using source context.',
+        metadata_only: 'Answered using document titles only.',
+        no_sources: 'Answered from general knowledge.',
+      };
+      setStatus(statusMap[result.groundingLevel ?? ''] ?? (result.mode === 'rag' ? 'Answered using sources.' : 'Answered in chat mode.'));
     } catch (error) {
       const friendly = extractFriendlyMessage(error, 'Unable to generate a response right now.');
       setMessages((current) =>

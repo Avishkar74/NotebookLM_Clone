@@ -58,6 +58,7 @@ export interface MemoryStore {
     activeSourceFiles?: string[];
   }): Promise<void>;
   saveMetadata(input: { userId: string; sessionId: string; label: string; payload: Record<string, unknown> }): Promise<void>;
+  getMetadata(input: { userId: string; sessionId: string; sourceId: string }): Promise<Record<string, unknown> | null>;
   // FIXED: getContext accepts activeSourceFiles to filter memory by source context
   getContext(input: { userId: string; sessionId: string; activeSourceFiles?: string[] }): Promise<string>;
   searchRelevant(input: { userId: string; query: string; limit?: number }): Promise<Array<Record<string, unknown>>>;

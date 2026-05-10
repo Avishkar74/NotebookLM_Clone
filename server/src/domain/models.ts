@@ -1,5 +1,22 @@
 import crypto from 'node:crypto';
 
+export enum SourceState {
+  UPLOADED = 'uploaded',
+  CHUNKED = 'chunked',
+  EMBEDDING_PENDING = 'embedding_pending',
+  EMBEDDING_FAILED = 'embedding_failed',
+  INDEXED = 'indexed',
+  RETRIEVAL_READY = 'retrieval_ready',
+}
+
+export enum GroundingLevel {
+  NO_SOURCES = 'no_sources',
+  METADATA_ONLY = 'metadata_only',
+  PARTIAL_INDEX = 'partial_index',
+  CHUNKS_RETRIEVED = 'chunks_retrieved',
+  STRONG_GROUNDED_CONTEXT = 'strong_grounded_context',
+}
+
 export type SourceType = 'pdf' | 'txt' | 'md' | 'web' | 'audio' | 'xml' | 'csv';
 
 export interface CitationInfo {
@@ -116,6 +133,8 @@ export interface RagAnswer {
   warnings?: string[];
   generationTokens?: number;
   embedderStatus?: 'primary' | 'fallback';
+  groundingLevel?: GroundingLevel;
+  attribution?: Array<{ statement: string; source: 'metadata' | 'retrieved_chunk' | 'cached_summary' | 'pretrained_model_knowledge' }>;
 }
 
 export interface IngestSummary {
@@ -125,4 +144,5 @@ export interface IngestSummary {
   chunkCount: number;
   vectorIds: string[];
   warnings?: string[];
+  state: SourceState;
 }
