@@ -75,42 +75,52 @@ export class RagPipeline {
     }
 
     // FIXED: Parse stable IDs back to display names for the LLM
-    const sourceNames = input.sourceFiles?.map(id => {
+    const selectedSourcesMetadata = input.sourceFiles?.map(id => {
       const parts = id.split('::');
-      return parts.length > 1 ? parts[1] : id;
+      return {
+        id,
+        name: parts.length > 1 ? parts[1] : id,
+      };
     }) ?? [];
 
+    const sourceListString = selectedSourcesMetadata.map(s => `- ${s.name}`).join('\n');
+
+    // HEURISTIC: Detect if user is asking about the sources themselves
+    const isMetadataQuery = /what (are|is|in) (your |the |my |)sources|assignments|files|uploaded/i.test(query);
+
     const prompt = hasContext
-      ? `You are an AI assistant that answers questions using ONLY the SOURCE CONTEXT blocks below.
+      ? `You are a source-grounded AI assistant. You have access to both document metadata and specific retrieved passages.
 
-STRICT RULES:
-- Answer factual questions using ONLY the [SOURCE CONTEXT] section.
-- The [CONVERSATION HISTORY] is provided only so you can maintain conversational flow and avoid re-explaining things the user already knows. Do NOT extract facts from it.
-- If the source context does not contain the answer, respond: "The selected sources do not contain information about this."
-- Cite sources using their reference numbers [1], [2], etc.
+[SELECTED DOCUMENTS — Metadata Only]
+${sourceListString || 'None selected.'}
 
-[SELECTED SOURCES]
-${sourceNames.join(', ') || 'None'}
-
-[CONVERSATION HISTORY — tone reference only, NOT a factual source]
-${memoryContext || 'No prior conversation.'}
-
-[SOURCE CONTEXT — your ONLY factual reference]
+[RETRIEVED PASSAGES — Specific Details]
 ${context}
+
+STRICT GROUNDING RULES:
+1. Use [RETRIEVED PASSAGES] for detailed factual answers.
+2. Use [SELECTED DOCUMENTS] to acknowledge the existence of files even if specific details aren't in the passages.
+3. If the query asks "what are my sources" or "what is in the files", use both metadata and passages to provide a complete answer.
+4. Cite passages using [1], [2], etc.
+5. If you mention a document name from the metadata that lacks retrieved passages, be transparent: "I see 'Filename' is selected, but no detailed passages were retrieved for this specific question."
+
+[CONVERSATION HISTORY — Tone reference only]
+${memoryContext || 'No prior conversation.'}
 
 [QUESTION]
 ${query}
 
 [ANSWER]`
-      : `You are a research assistant. You have access to the following documents, but the specific question did not match any stored text passages.
+      : `You are a research assistant. No specific text passages were retrieved for this query, but you are aware of the following selected documents.
 
-[SELECTED SOURCES]
-${sourceNames.join(', ') || 'None'}
+[SELECTED DOCUMENTS — Metadata Only]
+${sourceListString || 'None selected.'}
 
 STRICT RULES:
-- If sources are listed above, NEVER claim you cannot access or view them. 
-- Acknowledge that the sources exist but explain that no relevant passages were found for this specific query.
-- Answer from general knowledge only if relevant, but be transparent about the lack of specific retrieved data.
+1. NEVER claim you cannot access or view the documents listed above. 
+2. Acknowledge that these files are in your active notebook.
+3. Since no specific passages were found, explain that while you see the files "${selectedSourcesMetadata.map(s => s.name).join(', ')}", the current query did not return matching content from inside them.
+4. You may provide a general overview based on the filenames or your general knowledge of those topics, but explicitly label it as "General Knowledge" or "Inference from Title".
 
 [CONVERSATION HISTORY]
 ${memoryContext || 'No prior conversation.'}
