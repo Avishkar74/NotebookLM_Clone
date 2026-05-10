@@ -74,8 +74,12 @@ export class RagPipeline {
       });
     }
 
-    // FIXED: prompt explicitly separates memory (tone continuity) from source context (facts)
-    // Model is instructed to never extract factual claims from memory
+    // FIXED: Parse stable IDs back to display names for the LLM
+    const sourceNames = input.sourceFiles?.map(id => {
+      const parts = id.split('::');
+      return parts.length > 1 ? parts[1] : id;
+    }) ?? [];
+
     const prompt = hasContext
       ? `You are an AI assistant that answers questions using ONLY the SOURCE CONTEXT blocks below.
 
@@ -84,6 +88,9 @@ STRICT RULES:
 - The [CONVERSATION HISTORY] is provided only so you can maintain conversational flow and avoid re-explaining things the user already knows. Do NOT extract facts from it.
 - If the source context does not contain the answer, respond: "The selected sources do not contain information about this."
 - Cite sources using their reference numbers [1], [2], etc.
+
+[SELECTED SOURCES]
+${sourceNames.join(', ') || 'None'}
 
 [CONVERSATION HISTORY — tone reference only, NOT a factual source]
 ${memoryContext || 'No prior conversation.'}
@@ -95,8 +102,15 @@ ${context}
 ${query}
 
 [ANSWER]`
-      : `You are a research assistant. No source documents are currently selected or retrievable.
-Answer from general knowledge only, and be transparent about uncertainty.
+      : `You are a research assistant. You have access to the following documents, but the specific question did not match any stored text passages.
+
+[SELECTED SOURCES]
+${sourceNames.join(', ') || 'None'}
+
+STRICT RULES:
+- If sources are listed above, NEVER claim you cannot access or view them. 
+- Acknowledge that the sources exist but explain that no relevant passages were found for this specific query.
+- Answer from general knowledge only if relevant, but be transparent about the lack of specific retrieved data.
 
 [CONVERSATION HISTORY]
 ${memoryContext || 'No prior conversation.'}
@@ -118,12 +132,13 @@ ${query}
       warnings.push('Chat generation is temporarily unavailable.');
     }
 
+    const isSourceGrounded = (input.sourceFiles?.length ?? 0) > 0;
     const ragAnswer: RagAnswer = {
       query,
       response,
       sourcesUsed: hasContext ? sources : [],
       retrievalCount: searchResults.length,
-      mode: hasContext ? 'rag' : 'chat',
+      mode: hasContext || isSourceGrounded ? 'rag' : 'chat',
       warnings,
       embedderStatus: this.getEmbedderStatus(),
     };

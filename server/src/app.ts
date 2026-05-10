@@ -40,6 +40,10 @@ export const createApp = () => {
     next();
   });
 
+  app.get('/', (_req, res) => {
+    res.send('NotebookLM Clone API is running. Point your frontend to /api for requests.');
+  });
+
   app.use('/api', jsonRoutes(container));
 
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {

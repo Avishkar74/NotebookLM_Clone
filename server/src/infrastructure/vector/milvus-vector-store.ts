@@ -12,7 +12,12 @@ export class MilvusVectorStore implements VectorStore {
     private readonly collectionName = 'notebook_lm',
     private readonly embeddingDim = 384,
   ) {
-    this.client = new MilvusClient({ address: uri, token });
+    // FIXED: Clean URI to remove https:// and ensure port (prevents Milvus SDK warnings)
+    let cleanUri = uri.replace(/^https?:\/\//, '');
+    if (!cleanUri.includes(':')) {
+      cleanUri += ':19530';
+    }
+    this.client = new MilvusClient({ address: cleanUri, token });
   }
 
   public async ensureCollection(): Promise<void> {
