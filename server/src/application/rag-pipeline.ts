@@ -91,6 +91,14 @@ export class RagPipeline {
 
     const warnings: string[] = [];
 
+    // Bug 1 Fix: Re-hydrate the ResilientEmbedder's source map from client-provided state
+    if (input.sourceStateInfo && 'registerSourceEmbedder' in this.embedder) {
+      for (const s of input.sourceStateInfo) {
+        const type = s.embeddingModel === 'local-hash-embedder' ? 'fallback' : 'primary';
+        (this.embedder as any).registerSourceEmbedder(s.sourceId, type);
+      }
+    }
+
     // ── Analyze source states ─────────────────────────────────────────────────
     const sourceStateMap = new Map<string, SourceStateInfo>(
       (input.sourceStateInfo ?? []).map((s) => [s.sourceId, s])
@@ -144,7 +152,13 @@ export class RagPipeline {
       retrievableSourceIds.length > 0 ? retrievableSourceIds : input.sourceFiles,
     );
 
-    const filteredResults = searchResults.filter((r) => r.score >= MINIMUM_RETRIEVAL_SCORE);
+    // Bug 3 Fix: Lower score threshold when sources are fallback-indexed
+    const allFallback = retrievableSourceIds.every(
+      id => sourceStateMap.get(id)?.embeddingModel === 'local-hash-embedder'
+    );
+    const minScore = allFallback ? 0.05 : MINIMUM_RETRIEVAL_SCORE;
+
+    const filteredResults = searchResults.filter((r) => r.score >= minScore);
     const diverseResults = this.applyMMR(filteredResults, 0.7, input.maxChunks ?? 8);
     const hasContext = diverseResults.length > 0;
 
@@ -528,10 +542,8 @@ Summary:`;
     }
 
     try {
-      // Pass sourceIds to embedder so it can use the correct embedding space
-      const queryVector = await (this.embedder as ResilientEmbedder & Embedder).embedQuery
-        ? (this.embedder as any).embedQuery(query, sourceFiles)
-        : this.embedder.embedQuery(query);
+      // Bug 5 Fix: Pass sourceIds to embedder so it can use the correct embedding space
+      const queryVector = await this.embedder.embedQuery(query, sourceFiles);
 
       const filter: { sessionId?: string; sourceFiles?: string[] } = { sessionId };
       if (Array.isArray(sourceFiles) && sourceFiles.length > 0) {
