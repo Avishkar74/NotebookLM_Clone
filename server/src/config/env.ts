@@ -11,7 +11,9 @@ export const env = {
   geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-001',
   geminiLlmModel: process.env.GEMINI_LLM_MODEL ?? 'gemini-2.5-flash',
   chatanywhereApiKey: process.env.CHATANYWHERE_API_KEY ?? '',
-  baseUrl: process.env.BASE_URL ?? '',
+  baseUrl: (process.env.BASE_URL ?? '').includes('://') 
+    ? (process.env.BASE_URL ?? '') 
+    : (process.env.BASE_URL ? `https://${process.env.BASE_URL}` : ''),
   model: process.env.MODEL ?? 'gpt-4o-mini',
   milvusUri: process.env.MILVUS_URI ?? process.env.ZILLIZ_URI ?? '',
   milvusToken: process.env.MILVUS_TOKEN ?? process.env.ZILLIZ_TOKEN ?? '',

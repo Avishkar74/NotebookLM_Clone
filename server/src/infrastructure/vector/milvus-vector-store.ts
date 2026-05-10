@@ -12,9 +12,12 @@ export class MilvusVectorStore implements VectorStore {
     private readonly collectionName = 'notebook_lm',
     private readonly embeddingDim = 384,
   ) {
-    // FIXED: Clean URI to remove https:// and ensure port (prevents Milvus SDK warnings)
+    const isCloud = uri.includes('zillizcloud.com') || uri.includes('zilliz.com');
     let cleanUri = uri.replace(/^https?:\/\//, '');
-    if (!cleanUri.includes(':')) {
+    
+    // Zilliz Cloud usually expects the hostname and handles the port (443) automatically 
+    // or through the SDK's internal logic when no port is specified.
+    if (!isCloud && !cleanUri.includes(':')) {
       cleanUri += ':19530';
     }
     this.client = new MilvusClient({ address: cleanUri, token });
