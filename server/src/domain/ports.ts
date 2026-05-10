@@ -25,7 +25,7 @@ export interface Chunker {
 
 export interface Embedder {
   embedDocuments(chunks: DocumentChunk[], sessionId?: string): Promise<EmbeddedChunk[]>;
-  embedQuery(text: string): Promise<number[]>;
+  embedQuery(text: string, sourceIds?: string[]): Promise<number[]>;
   getDimension(): Promise<number>;
 }
 

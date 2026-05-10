@@ -1,10 +1,62 @@
 import type { Embedder, LLMClient, MemoryStore, VectorStore } from '../domain/ports.js';
 import type { RagAnswer, RetrievedChunk, RagSource } from '../domain/models.js';
-import { GroundingLevel, SourceState } from '../domain/models.js';
+import { GroundingLevel, QueryIntent } from '../domain/models.js';
 import { logger } from '../utils/logger.js';
+import type { ResilientEmbedder } from '../infrastructure/embeddings/resilient-embedder.js';
 
-const MINIMUM_RETRIEVAL_SCORE = 0.20; 
-const MAX_MEMORY_CHARS = 1500;        
+const MINIMUM_RETRIEVAL_SCORE = 0.20;
+const STRONG_RETRIEVAL_SCORE = 0.55;
+const MAX_MEMORY_CHARS = 1500;
+
+// ─── Intent Classification ────────────────────────────────────────────────────
+
+function classifyIntent(query: string): QueryIntent {
+  const q = query.toLowerCase();
+
+  // Metadata / source listing queries — NEVER need vector search
+  if (/\b(what files|which files|what sources|list (my |the |)sources|what (do i|have i) (uploaded|added)|show (me |)(my |)(files|sources|documents))\b/.test(q)) {
+    return QueryIntent.SOURCE_LISTING;
+  }
+  if (/\b(what (are|is) (in |)(my |the |)(sources|files|documents)|what (do i|have i) (have|got))\b/.test(q) && !/\b(content|say|about|discuss|explain|describe|detail)\b/.test(q)) {
+    return QueryIntent.METADATA_QUERY;
+  }
+
+  // Summarization
+  if (/\b(summarize|summary|overview|tldr|tl;dr|key (points|ideas|takeaways)|main (points|ideas|topics))\b/.test(q)) {
+    return QueryIntent.SUMMARIZATION;
+  }
+
+  // Default to semantic content search
+  return QueryIntent.SEMANTIC_CONTENT;
+}
+
+// ─── Grounding level determination ───────────────────────────────────────────
+
+function determineGroundingLevel(
+  retrievedChunks: RetrievedChunk[],
+  hasFailedSources: boolean,
+  hasFallbackSources: boolean,
+  sourceCount: number,
+): GroundingLevel {
+  if (sourceCount === 0) return GroundingLevel.NO_SOURCES;
+  if (retrievedChunks.length === 0 && hasFailedSources) return GroundingLevel.METADATA_ONLY;
+  if (retrievedChunks.length === 0 && hasFallbackSources) return GroundingLevel.FALLBACK_INDEX;
+  if (retrievedChunks.length === 0) return GroundingLevel.METADATA_ONLY;
+
+  const avgScore = retrievedChunks.reduce((sum, r) => sum + r.score, 0) / retrievedChunks.length;
+  if (retrievedChunks.length >= 3 && avgScore >= STRONG_RETRIEVAL_SCORE) return GroundingLevel.STRONG_GROUNDED;
+  if (retrievedChunks.length > 0 && hasFailedSources) return GroundingLevel.PARTIAL_INDEX;
+  return GroundingLevel.CHUNKS_RETRIEVED;
+}
+
+// ─── Source state info passed from the query handler ─────────────────────────
+
+export interface SourceStateInfo {
+  sourceId: string;
+  embeddingFailed: boolean;
+  embeddingModel: string;
+  name: string;
+}
 
 export class RagPipeline {
   constructor(
@@ -23,123 +75,355 @@ export class RagPipeline {
     maxContextChars?: number;
     llmClient?: LLMClient;
     sourceFiles?: string[];
+    sourceStateInfo?: SourceStateInfo[];  // NEW: embedding state per source
   }): Promise<RagAnswer> {
-    const { userId, sessionId, query, sourceFiles } = input;
+    const query = input.query.trim();
+    if (!query) {
+      return {
+        query: input.query,
+        response: 'Please provide a valid question.',
+        sourcesUsed: [],
+        retrievalCount: 0,
+        mode: 'chat',
+        groundingLevel: GroundingLevel.NO_SOURCES,
+      };
+    }
+
     const warnings: string[] = [];
 
-    // 1. Fetch metadata and evaluate grounding readiness
-    const selectedSourcesMetadata: Array<{ id: string; name: string; state: SourceState }> = [];
-    if (sourceFiles && sourceFiles.length > 0) {
-      for (const id of sourceFiles) {
-        try {
-          const meta = await this.memoryStore.getMetadata({ userId, sessionId, sourceId: id });
-          const parts = id.split('::');
-          const name = parts.length > 1 ? parts[1] : id;
-          selectedSourcesMetadata.push({
-            id,
-            name,
-            state: (meta?.state as SourceState) ?? SourceState.RETRIEVAL_READY,
-          });
-        } catch (error) {
-          logger.warn('metadata_fetch_failed', { id, error });
-        }
-      }
+    // ── Analyze source states ─────────────────────────────────────────────────
+    const sourceStateMap = new Map<string, SourceStateInfo>(
+      (input.sourceStateInfo ?? []).map((s) => [s.sourceId, s])
+    );
+    const selectedSourceIds = input.sourceFiles ?? [];
+    const hasSelectedSources = selectedSourceIds.length > 0;
+
+    const failedSourceIds = selectedSourceIds.filter((id) => sourceStateMap.get(id)?.embeddingFailed === true);
+    const fallbackSourceIds = selectedSourceIds.filter((id) => sourceStateMap.get(id)?.embeddingModel === 'local-hash-embedder');
+    const retrievableSourceIds = selectedSourceIds.filter((id) => {
+      const state = sourceStateMap.get(id);
+      return !state?.embeddingFailed;
+    });
+
+    const hasFailedSources = failedSourceIds.length > 0;
+    const hasFallbackSources = fallbackSourceIds.length > 0;
+    const hasAnyRetrievableSource = retrievableSourceIds.length > 0;
+
+    // Warn about failed sources upfront
+    if (hasFailedSources) {
+      const failedNames = failedSourceIds
+        .map((id) => sourceStateMap.get(id)?.name ?? id)
+        .join(', ');
+      warnings.push(`Embedding failed for: ${failedNames}. These sources cannot be semantically searched.`);
     }
 
-    const failedSources = selectedSourcesMetadata.filter(s => s.state === SourceState.EMBEDDING_FAILED);
-    if (failedSources.length > 0) {
-      warnings.push(`The following sources have failed embeddings and cannot be used for semantic search: ${failedSources.map(s => s.name).join(', ')}`);
+    if (hasFallbackSources) {
+      warnings.push('Some sources use keyword-based indexing (semantic embedding failed). Retrieval quality is reduced.');
     }
 
-    // 2. Intent Classification
-    const isMetadataQuery = /what (are|is|in) (your |the |my |)sources|assignments|files|uploaded|index/i.test(query);
-    
-    // 3. Retrieval Orchestration
-    let searchResults: RetrievedChunk[] = [];
-    let groundingLevel = GroundingLevel.NO_SOURCES;
+    // ── Intent classification ─────────────────────────────────────────────────
+    const intent = classifyIntent(query);
 
-    if (selectedSourcesMetadata.length > 0) {
-      groundingLevel = GroundingLevel.METADATA_ONLY;
-      
-      // Only perform vector search if we have valid sources and it's not a pure metadata query
-      const hasReadySources = selectedSourcesMetadata.some(s => s.state === SourceState.RETRIEVAL_READY);
-      if (!isMetadataQuery && hasReadySources) {
-        searchResults = await this.tryRetrieve(query, sessionId, input.topK ?? 10, warnings, sourceFiles);
-      }
+    // ── Metadata-only queries bypass vector search entirely ───────────────────
+    if (intent === QueryIntent.SOURCE_LISTING || intent === QueryIntent.METADATA_QUERY) {
+      return this.handleMetadataQuery(query, input, sourceStateMap, selectedSourceIds, warnings);
     }
 
-    const diverseResults = this.applyMMR(searchResults, 0.6, input.maxChunks ?? 8);
-    const { context, sources } = this.formatContext(diverseResults, input.maxChunks ?? 8, input.maxContextChars ?? 4000);
+    // ── If ALL selected sources have failed embeddings: hard block ────────────
+    if (hasSelectedSources && !hasAnyRetrievableSource) {
+      return this.buildEmbeddingFailedResponse(query, input, sourceStateMap, selectedSourceIds, warnings);
+    }
+
+    // ── Vector retrieval ──────────────────────────────────────────────────────
+    const searchResults = await this.tryRetrieve(
+      query,
+      input.sessionId,
+      input.topK ?? 10,
+      warnings,
+      // Only search sources that are actually retrievable
+      retrievableSourceIds.length > 0 ? retrievableSourceIds : input.sourceFiles,
+    );
+
+    const filteredResults = searchResults.filter((r) => r.score >= MINIMUM_RETRIEVAL_SCORE);
+    const diverseResults = this.applyMMR(filteredResults, 0.7, input.maxChunks ?? 8);
     const hasContext = diverseResults.length > 0;
 
-    if (hasContext) {
-      groundingLevel = diverseResults.some(r => r.score > 0.6) 
-        ? GroundingLevel.STRONG_GROUNDED_CONTEXT 
-        : GroundingLevel.CHUNKS_RETRIEVED;
+    const groundingLevel = determineGroundingLevel(
+      diverseResults,
+      hasFailedSources,
+      hasFallbackSources,
+      selectedSourceIds.length,
+    );
+
+    const { context, sources } = this.formatContext(
+      diverseResults,
+      input.maxChunks ?? 8,
+      input.maxContextChars ?? 3500,
+    );
+
+    // ── Memory context ────────────────────────────────────────────────────────
+    let memoryContext = '';
+    try {
+      memoryContext = await this.memoryStore.getContext({
+        userId: input.userId,
+        sessionId: input.sessionId,
+        activeSourceFiles: input.sourceFiles,
+      });
+      if (memoryContext.length > MAX_MEMORY_CHARS) {
+        memoryContext = memoryContext.slice(-MAX_MEMORY_CHARS);
+      }
+    } catch (error) {
+      logger.warn('memory_context_lookup_failed', {
+        error: error instanceof Error ? error.message : 'unknown_error',
+      });
     }
 
-    // 4. Memory/History
-    const memoryContext = await this.memoryStore.getContext({ userId, sessionId, activeSourceFiles: sourceFiles });
+    // ── Prompt construction ───────────────────────────────────────────────────
+    const selectedSourcesMetadata = selectedSourceIds.map((id) => {
+      const state = sourceStateMap.get(id);
+      const parts = id.split('::');
+      return {
+        id,
+        name: state?.name ?? (parts.length > 1 ? parts[1] : id),
+        embeddingFailed: state?.embeddingFailed ?? false,
+        embeddingModel: state?.embeddingModel ?? 'unknown',
+      };
+    });
 
-    // 5. Prompt Engineering with Attribution Tracking
-    const sourceListString = selectedSourcesMetadata.map(s => `- ${s.name} [State: ${s.state}]`).join('\n');
-
-    const prompt = `You are a professional research assistant (NotebookLM Clone). Your goal is to provide STRICTLY grounded answers based on the provided documents.
-
-[SELECTED DOCUMENTS — Metadata Only Knowledge]
-${sourceListString || 'None selected.'}
-
-[RETRIEVED PASSAGES — Content Knowledge]
-${context || 'No matching passages retrieved for this query.'}
-
-STRICT GROUNDING RULES:
-1. If sources are selected but no passages are retrieved, NEVER speculate about the content from the filename.
-2. If you see "Assignment 03 — Google NotebookLM RAG.pdf" but no passages exist, respond: "I can see this assignment is in your notebook, but I haven't retrieved any matching content from inside it yet."
-3. DO NOT use pretrained knowledge to fill gaps. If the document says nothing about a topic, say you don't know.
-4. If you use information from the [SELECTED DOCUMENTS] list (like the title), label it as "From Metadata".
-5. If you use information from the [RETRIEVED PASSAGES] list, cite it using [1], [2], etc.
-6. PROHIBITED: "This assignment likely involves...", "This sounds like...", "Based on my general knowledge...".
-
-[CONVERSATION HISTORY — Tone reference only]
-${memoryContext || 'No prior conversation.'}
-
-[QUESTION]
-${query}
-
-[ANSWER — Be concise and factual]`;
+    const prompt = this.buildPrompt({
+      query,
+      hasContext,
+      context,
+      selectedSourcesMetadata,
+      memoryContext,
+      groundingLevel,
+      hasFailedSources,
+    });
 
     const activeLlmClient = input.llmClient ?? this.defaultLlmClient;
     let response = '';
     try {
       response = await activeLlmClient.generate(prompt, { maxTokens: 2000 });
     } catch (error) {
-      logger.error('llm_generation_failed', { error: error instanceof Error ? error.message : 'unknown_error' });
+      logger.error('llm_generation_failed', {
+        error: error instanceof Error ? error.message : 'unknown_error',
+      });
       response = this.buildOfflineFallbackAnswer(query, diverseResults);
-      warnings.push('LLM generation failed.');
+      warnings.push('Chat generation is temporarily unavailable.');
     }
 
     const ragAnswer: RagAnswer = {
       query,
       response,
-      sourcesUsed: sources,
+      sourcesUsed: hasContext ? sources : [],
       retrievalCount: searchResults.length,
-      mode: (selectedSourcesMetadata.length > 0) ? 'rag' : 'chat',
+      mode: hasContext || hasSelectedSources ? 'rag' : 'chat',
       warnings,
       embedderStatus: this.getEmbedderStatus(),
       groundingLevel,
     };
 
-    // 6. Persistence
-    await this.memoryStore.saveTurn({
-      userId,
-      sessionId,
-      query,
-      response,
-      sourcesUsed: sources,
-      activeSourceFiles: sourceFiles,
-    });
+    try {
+      await this.memoryStore.saveTurn({
+        userId: input.userId,
+        sessionId: input.sessionId,
+        query,
+        response,
+        sourcesUsed: hasContext ? sources : [],
+        activeSourceFiles: input.sourceFiles ?? [],
+      });
+    } catch (error) {
+      logger.warn('memory_turn_save_failed', {
+        error: error instanceof Error ? error.message : 'unknown_error',
+      });
+    }
 
     return ragAnswer;
+  }
+
+  // ── Handle metadata/source-listing queries without vector search ─────────────
+
+  private async handleMetadataQuery(
+    query: string,
+    input: Parameters<RagPipeline['answer']>[0],
+    sourceStateMap: Map<string, SourceStateInfo>,
+    selectedSourceIds: string[],
+    warnings: string[],
+  ): Promise<RagAnswer> {
+    const sourceList = selectedSourceIds.map((id) => {
+      const state = sourceStateMap.get(id);
+      const parts = id.split('::');
+      const name = state?.name ?? (parts.length > 1 ? parts[1] : id);
+      const status = state?.embeddingFailed ? ' [⚠ Embedding Failed — content not searchable]'
+        : state?.embeddingModel === 'local-hash-embedder' ? ' [⚡ Keyword Index Only]'
+        : ' [✓ Semantic Index]';
+      return `- ${name}${status}`;
+    }).join('\n');
+
+    const prompt = `You are a document assistant. The user is asking about their uploaded files, not the content inside them.
+
+UPLOADED SOURCES (${selectedSourceIds.length} total):
+${sourceList || 'No sources are currently selected.'}
+
+RULES:
+- List the sources clearly using the information above.
+- If a source shows [⚠ Embedding Failed], explicitly state it cannot be searched.
+- Do NOT speculate about the content of any file based on its filename.
+- Do NOT say "this likely involves" or make any assumptions about file contents.
+- Only state what you can observe: the filename and its indexing status.
+
+USER QUESTION: ${query}
+
+ANSWER:`;
+
+    const activeLlmClient = input.llmClient ?? this.defaultLlmClient;
+    let response = '';
+    try {
+      response = await activeLlmClient.generate(prompt, { maxTokens: 800 });
+    } catch {
+      response = selectedSourceIds.length > 0
+        ? `You have ${selectedSourceIds.length} source(s) selected:\n${sourceList}`
+        : 'No sources are currently selected.';
+    }
+
+    return {
+      query,
+      response,
+      sourcesUsed: [],
+      retrievalCount: 0,
+      mode: 'rag',
+      warnings,
+      groundingLevel: GroundingLevel.METADATA_ONLY,
+    };
+  }
+
+  // ── Hard block when ALL sources have failed embeddings ───────────────────────
+
+  private buildEmbeddingFailedResponse(
+    query: string,
+    input: Parameters<RagPipeline['answer']>[0],
+    sourceStateMap: Map<string, SourceStateInfo>,
+    selectedSourceIds: string[],
+    warnings: string[],
+  ): RagAnswer {
+    const sourceNames = selectedSourceIds
+      .map((id) => sourceStateMap.get(id)?.name ?? id.split('::')[1] ?? id)
+      .join(', ');
+
+    const response = [
+      `**Semantic retrieval is unavailable** for the selected source(s): ${sourceNames}`,
+      '',
+      'Embeddings were not successfully generated for these files. This means I cannot search their content or answer questions about what is inside them.',
+      '',
+      '**Why this happens:**',
+      '- The embedding API (OpenAI/ChatAnywhere) failed or was rate-limited during upload',
+      '- The API key may be invalid or have insufficient quota',
+      '',
+      '**To fix this:**',
+      '1. Check the `CHATANYWHERE_API_KEY` and `BASE_URL` environment variables on the server',
+      '2. Re-upload the affected files once the embedding service is working',
+      '',
+      'I will not speculate about the file contents based on their filenames.',
+    ].join('\n');
+
+    return {
+      query,
+      response,
+      sourcesUsed: [],
+      retrievalCount: 0,
+      mode: 'rag',
+      warnings: [...warnings, 'All selected sources have failed embeddings. Semantic retrieval is disabled.'],
+      groundingLevel: GroundingLevel.METADATA_ONLY,
+    };
+  }
+
+  // ── Prompt construction with strict grounding rules ──────────────────────────
+
+  private buildPrompt(input: {
+    query: string;
+    hasContext: boolean;
+    context: string;
+    selectedSourcesMetadata: Array<{ id: string; name: string; embeddingFailed: boolean; embeddingModel: string }>;
+    memoryContext: string;
+    groundingLevel: GroundingLevel;
+    hasFailedSources: boolean;
+  }): string {
+    const { query, hasContext, context, selectedSourcesMetadata, memoryContext, groundingLevel, hasFailedSources } = input;
+
+    const sourceList = selectedSourcesMetadata
+      .map((s) => `- ${s.name}${s.embeddingFailed ? ' [EMBEDDING FAILED — not searchable]' : ''}`)
+      .join('\n');
+
+    if (hasContext) {
+      return `You are a strict source-grounded AI assistant. You ONLY answer from the provided retrieved passages.
+
+[SELECTED DOCUMENTS]
+${sourceList || 'None selected.'}
+
+[RETRIEVED PASSAGES — these are the ONLY facts you may use]
+${context}
+
+ABSOLUTE RULES — NEVER VIOLATE THESE:
+1. ONLY use information from [RETRIEVED PASSAGES] above. Do NOT use any other knowledge.
+2. NEVER speculate, infer, or extrapolate beyond what the passages explicitly state.
+3. NEVER say "this likely involves" or "this probably means" or "based on the title".
+4. NEVER blend in your pre-trained knowledge about the topic.
+5. Cite every factual claim with [1], [2], etc. referencing the passage numbers.
+6. If the passages don't contain enough to answer fully, say exactly what you found and what's missing.
+${hasFailedSources ? '7. Some sources had embedding failures and could not be searched — acknowledge this if relevant.' : ''}
+
+[PRIOR CONVERSATION — for tone reference only, do NOT mix facts from here into your answer]
+${memoryContext || 'None.'}
+
+[QUESTION]
+${query}
+
+[ANSWER — grounded strictly in the retrieved passages above]`;
+    }
+
+    // No context retrieved — strict no-hallucination response
+    if (selectedSourcesMetadata.length > 0) {
+      const failedSources = selectedSourcesMetadata.filter((s) => s.embeddingFailed);
+      const workingSources = selectedSourcesMetadata.filter((s) => !s.embeddingFailed);
+
+      const failedNote = failedSources.length > 0
+        ? `\nNote: ${failedSources.map((s) => s.name).join(', ')} had embedding failures and cannot be searched.`
+        : '';
+
+      return `You are a strict source-grounded AI assistant.
+
+[SELECTED DOCUMENTS]
+${sourceList}${failedNote}
+
+SITUATION: The user's query did not retrieve any matching passages from the document content.
+
+ABSOLUTE RULES — NEVER VIOLATE THESE:
+1. Do NOT speculate about what any document contains based on its filename or title.
+2. Do NOT say "this assignment likely involves" or any similar inference from filenames.
+3. Do NOT draw on your pre-trained knowledge to answer questions about these documents.
+4. Do NOT pretend you can see the document contents.
+
+YOU MUST respond with EXACTLY this type of message:
+"I can see these files are selected: [list filenames]. However, no matching content was retrieved for your question. ${failedSources.length > 0 ? 'Some sources had embedding failures and their content is not searchable. ' : ''}${workingSources.length > 0 ? "For the sources that are indexed, try rephrasing your question or ask about specific topics you know are in the documents." : "Please re-upload your files once the embedding service is working."}"
+
+Do NOT add anything beyond this. No guesses, no general knowledge, no topic overviews.
+
+[QUESTION]
+${query}
+
+[ANSWER]`;
+    }
+
+    // No sources selected at all — pure chat mode
+    return `You are a helpful AI assistant. No document sources are currently selected.
+
+[PRIOR CONVERSATION]
+${memoryContext || 'None.'}
+
+[QUESTION]
+${query}
+
+[ANSWER]`;
   }
 
   public async summarize(input: {
@@ -149,21 +433,21 @@ ${query}
     summaryLength?: 'short' | 'medium' | 'long';
     llmClient?: LLMClient;
     sourceFiles?: string[];
+    sourceStateInfo?: SourceStateInfo[];
   }): Promise<RagAnswer> {
-    const searchResults = await this.tryRetrieve(
-      'main topics key findings important information overview summary',
-      input.sessionId,
+    const searchResults = await this.vectorStore.search(
+      await this.embedder.embedQuery('main topics key findings important information overview'),
       input.topK ?? 15,
-      [],
-      input.sourceFiles
+      { sessionId: input.sessionId, sourceFiles: input.sourceFiles },
     );
 
     if (!searchResults.length) {
       return {
         query: 'Document Summary',
-        response: 'No documents are available for summarization.',
+        response: 'No indexed document content is available for summarization. Please ensure your sources were successfully embedded.',
         sourcesUsed: [],
         retrievalCount: 0,
+        groundingLevel: GroundingLevel.NO_SOURCES,
       };
     }
 
@@ -174,7 +458,7 @@ ${query}
       long: 'Provide a detailed summary with multiple sections covering all major topics and supporting details.',
     }[input.summaryLength ?? 'medium'];
 
-    const prompt = `Summarize the provided document content.
+    const prompt = `Summarize the provided document content. Base your summary ONLY on the context below.
 ${lengthInstruction}
 
 Context:
@@ -190,6 +474,7 @@ Summary:`;
       response,
       sourcesUsed: sources,
       retrievalCount: searchResults.length,
+      groundingLevel: GroundingLevel.CHUNKS_RETRIEVED,
     };
   }
 
@@ -243,15 +528,22 @@ Summary:`;
     }
 
     try {
-      const queryVector = await this.embedder.embedQuery(query);
+      // Pass sourceIds to embedder so it can use the correct embedding space
+      const queryVector = await (this.embedder as ResilientEmbedder & Embedder).embedQuery
+        ? (this.embedder as any).embedQuery(query, sourceFiles)
+        : this.embedder.embedQuery(query);
+
       const filter: { sessionId?: string; sourceFiles?: string[] } = { sessionId };
       if (Array.isArray(sourceFiles) && sourceFiles.length > 0) {
         filter.sourceFiles = sourceFiles;
       }
-      return await this.vectorStore.search(queryVector, topK, filter);
+      const results = await this.vectorStore.search(queryVector, topK, filter);
+      return results;
     } catch (error) {
-      logger.warn('retrieval_failed', { error });
-      warnings.push('Retrieval is unavailable right now.');
+      logger.warn('retrieval_path_failed_falling_back_to_chat', {
+        error: error instanceof Error ? error.message : 'unknown_error',
+      });
+      warnings.push('Retrieval is unavailable right now. Responding in chat mode.');
       return [];
     }
   }

@@ -8,7 +8,7 @@ export class LocalHashEmbedder implements Embedder {
     return chunks.map((chunk) => new EmbeddedChunk(chunk, this.createVector(chunk.content), 'local-hash-embedder', sessionId));
   }
 
-  public async embedQuery(text: string): Promise<number[]> {
+  public async embedQuery(text: string, _sourceIds?: string[]): Promise<number[]> {
     return this.createVector(text);
   }
 

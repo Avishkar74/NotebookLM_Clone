@@ -8,6 +8,7 @@ import type { AppContainer } from '../bootstrap.js';
 import { logger } from '../utils/logger.js';
 import { AppError } from '../errors/app-error.js';
 import { OpenAiLlmClient } from '../infrastructure/generation/openai-llm-client.js';
+import type { SourceStateInfo } from '../application/rag-pipeline.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -59,6 +60,13 @@ export const jsonRoutes = (container: AppContainer) => {
         ? await container.ingestionService.ingestAudio({ userId, sessionId, filePath: tempPath })
         : await container.ingestionService.ingestFile({ userId, sessionId, filePath: tempPath, displayName });
 
+      // Register the embedding model used with the resilient embedder for future query routing
+      if ('registerSourceEmbedder' in container.embedder) {
+        const embedderType = result.embeddingModel === 'local-hash-embedder' ? 'fallback' : 'primary';
+        (container.embedder as any).registerSourceEmbedder(result.id, embedderType);
+        logger.info('registered_source_embedder', { sourceId: result.id, embedderType });
+      }
+
       response.json(result);
     } catch (error) {
       logger.warn('route_ingest_file_failed', {
@@ -85,6 +93,12 @@ export const jsonRoutes = (container: AppContainer) => {
 
       await container.memoryStore.ensureSession({ userId, sessionId, userName: container.env.defaultUserName });
       const result = await container.ingestionService.ingestUrl({ userId, sessionId, url });
+
+      if ('registerSourceEmbedder' in container.embedder) {
+        const embedderType = result.embeddingModel === 'local-hash-embedder' ? 'fallback' : 'primary';
+        (container.embedder as any).registerSourceEmbedder(result.id, embedderType);
+      }
+
       response.json(result);
     } catch (error) {
       logger.warn('route_ingest_url_failed', {
@@ -108,6 +122,12 @@ export const jsonRoutes = (container: AppContainer) => {
 
       await container.memoryStore.ensureSession({ userId, sessionId, userName: container.env.defaultUserName });
       const result = await container.ingestionService.ingestText({ userId, sessionId, text, title });
+
+      if ('registerSourceEmbedder' in container.embedder) {
+        const embedderType = result.embeddingModel === 'local-hash-embedder' ? 'fallback' : 'primary';
+        (container.embedder as any).registerSourceEmbedder(result.id, embedderType);
+      }
+
       response.json(result);
     } catch (error) {
       logger.warn('route_ingest_text_failed', {
@@ -133,6 +153,12 @@ export const jsonRoutes = (container: AppContainer) => {
 
       await container.memoryStore.ensureSession({ userId, sessionId, userName: container.env.defaultUserName });
       const result = await container.ingestionService.ingestAudio({ userId, sessionId, filePath: tempPath });
+
+      if ('registerSourceEmbedder' in container.embedder) {
+        const embedderType = result.embeddingModel === 'local-hash-embedder' ? 'fallback' : 'primary';
+        (container.embedder as any).registerSourceEmbedder(result.id, embedderType);
+      }
+
       response.json(result);
     } catch (error) {
       next(new AppError('audio_ingestion_failed', 500, 'INGESTION_FAILED', 'Audio ingestion failed. Please try again.'));
@@ -153,7 +179,6 @@ export const jsonRoutes = (container: AppContainer) => {
         response.status(400).json({ error: 'url is required' });
         return;
       }
-
       response.json(await container.ingestionService.previewUrl(url));
     } catch (error) {
       logger.warn('route_preview_failed', {
@@ -165,7 +190,6 @@ export const jsonRoutes = (container: AppContainer) => {
 
   router.get('/diagnostics/embedding', async (_request, response) => {
     const probeText = 'embedding diagnostics probe';
-
     try {
       const vector = await container.embedder.embedQuery(probeText);
       response.json({
@@ -193,20 +217,32 @@ export const jsonRoutes = (container: AppContainer) => {
       const topK = Number(request.body.topK ?? 10);
       const sourceFiles = request.body.sourceFiles ? (request.body.sourceFiles as string[]) : undefined;
 
-      // Hybrid BYOK Logic
+      // NEW: Client passes source state info so the pipeline can route correctly
+      // Shape: Array<{ sourceId, embeddingFailed, embeddingModel, name }>
+      const sourceStateInfo: SourceStateInfo[] | undefined = request.body.sourceStateInfo
+        ? (request.body.sourceStateInfo as SourceStateInfo[])
+        : undefined;
+
       const authHeader = request.headers.authorization;
       let llmClient: OpenAiLlmClient | undefined;
 
       if (authHeader && authHeader.startsWith('Bearer ')) {
         const userKey = authHeader.substring(7).trim();
         if (userKey && userKey !== 'undefined' && userKey !== 'null') {
-          // Official OpenAI (no baseURL) using the configured model
-          llmClient = new OpenAiLlmClient(userKey, undefined, container.env.model); 
+          llmClient = new OpenAiLlmClient(userKey, undefined, container.env.model);
         }
       }
 
       await container.memoryStore.ensureSession({ userId, sessionId, userName: container.env.defaultUserName });
-      const result = await container.ragPipeline.answer({ userId, sessionId, query, topK, llmClient, sourceFiles });
+      const result = await container.ragPipeline.answer({
+        userId,
+        sessionId,
+        query,
+        topK,
+        llmClient,
+        sourceFiles,
+        sourceStateInfo,
+      });
       response.json(result);
     } catch (error) {
       next(error);
@@ -220,7 +256,6 @@ export const jsonRoutes = (container: AppContainer) => {
         response.status(404).json({ error: 'source not found' });
         return;
       }
-
       response.json(source);
     } catch (error) {
       next(error);

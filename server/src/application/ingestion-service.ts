@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { AudioTranscriber, Chunker, DocumentLoader, Embedder, MemoryStore, VectorStore, WebLoader } from '../domain/ports.js';
-import { DocumentChunk, SourceState } from '../domain/models.js';
 import type { IngestSummary } from '../domain/models.js';
+import { DocumentChunk } from '../domain/models.js';
 import { logger } from '../utils/logger.js';
 
 export class IngestionService {
@@ -28,7 +28,7 @@ export class IngestionService {
 
     const sourceId = `text::${input.title}::${input.sessionId}`;
 
-    const { vectorIds, warnings, state } = await this.embedAndStore(chunks, {
+    const { vectorIds, warnings, embeddingFailed, embeddingModel } = await this.embedAndStore(chunks, {
       sourceType: 'file',
       sourceName: input.title,
       sessionId: input.sessionId,
@@ -43,7 +43,8 @@ export class IngestionService {
         sourceId,
         title: input.title,
         chunkCount: chunks.length,
-        state,
+        embeddingFailed,
+        embeddingModel,
       },
     });
 
@@ -54,7 +55,8 @@ export class IngestionService {
       chunkCount: chunks.length,
       vectorIds,
       warnings,
-      state,
+      embeddingFailed,
+      embeddingModel,
     };
   }
 
@@ -63,7 +65,7 @@ export class IngestionService {
     const sourceName = input.displayName ?? path.basename(input.filePath);
     const sourceId = `file::${sourceName}::${input.sessionId}`;
 
-    const { vectorIds, warnings, state } = await this.embedAndStore(chunks, {
+    const { vectorIds, warnings, embeddingFailed, embeddingModel } = await this.embedAndStore(chunks, {
       sourceType: 'file',
       sourceName,
       sessionId: input.sessionId,
@@ -79,7 +81,8 @@ export class IngestionService {
         name: sourceName,
         chunkCount: chunks.length,
         sourceType: chunks[0]?.sourceType ?? 'txt',
-        state,
+        embeddingFailed,
+        embeddingModel,
       },
     });
 
@@ -90,7 +93,8 @@ export class IngestionService {
       chunkCount: chunks.length,
       vectorIds,
       warnings,
-      state,
+      embeddingFailed,
+      embeddingModel,
     };
   }
 
@@ -99,7 +103,7 @@ export class IngestionService {
     const urlSourceName = chunks[0]?.sourceFile ?? new URL(input.url).hostname;
     const sourceId = `url::${input.url}::${input.sessionId}`;
 
-    const { vectorIds, warnings, state } = await this.embedAndStore(chunks, {
+    const { vectorIds, warnings, embeddingFailed, embeddingModel } = await this.embedAndStore(chunks, {
       sourceType: 'url',
       sourceName: urlSourceName,
       sessionId: input.sessionId,
@@ -115,7 +119,8 @@ export class IngestionService {
         url: input.url,
         title: urlSourceName,
         chunkCount: chunks.length,
-        state,
+        embeddingFailed,
+        embeddingModel,
       },
     });
 
@@ -126,7 +131,8 @@ export class IngestionService {
       chunkCount: chunks.length,
       vectorIds,
       warnings,
-      state,
+      embeddingFailed,
+      embeddingModel,
     };
   }
 
@@ -135,7 +141,7 @@ export class IngestionService {
     const audioName = path.basename(input.filePath);
     const sourceId = `audio::${audioName}::${input.sessionId}`;
 
-    const { vectorIds, warnings, state } = await this.embedAndStore(chunks, {
+    const { vectorIds, warnings, embeddingFailed, embeddingModel } = await this.embedAndStore(chunks, {
       sourceType: 'audio',
       sourceName: audioName,
       sessionId: input.sessionId,
@@ -151,7 +157,8 @@ export class IngestionService {
         name: audioName,
         chunkCount: chunks.length,
         sourceType: 'audio',
-        state,
+        embeddingFailed,
+        embeddingModel,
       },
     });
 
@@ -162,7 +169,8 @@ export class IngestionService {
       chunkCount: chunks.length,
       vectorIds,
       warnings,
-      state,
+      embeddingFailed,
+      embeddingModel,
     };
   }
 
@@ -173,7 +181,7 @@ export class IngestionService {
   private async embedAndStore(
     chunks: Awaited<ReturnType<DocumentLoader['load']>>,
     metadata: { sourceType: 'file' | 'url' | 'audio'; sourceName: string; sessionId?: string; sourceId: string },
-  ): Promise<{ vectorIds: string[]; warnings: string[]; state: SourceState }> {
+  ): Promise<{ vectorIds: string[]; warnings: string[]; embeddingFailed: boolean; embeddingModel: string }> {
     const warnings: string[] = [];
 
     const stampedChunks = chunks.map(
@@ -193,20 +201,37 @@ export class IngestionService {
 
     try {
       const embeddedChunks = await this.embedder.embedDocuments(stampedChunks, metadata.sessionId);
+
+      // Detect which embedder was used — check embedding_model from first chunk
+      const embeddingModel = embeddedChunks[0]?.embeddingModel ?? 'unknown';
+      const isFallback = embeddingModel === 'local-hash-embedder';
+
+      if (isFallback) {
+        warnings.push(
+          'Semantic embeddings failed — using keyword fallback. Retrieval quality will be significantly reduced. ' +
+          'Check your CHATANYWHERE_API_KEY and BASE_URL configuration.',
+        );
+        logger.warn('ingestion_used_fallback_embedder', {
+          sourceId: metadata.sourceId,
+          embeddingModel,
+          chunkCount: embeddedChunks.length,
+        });
+      }
+
       const vectorIds = await this.vectorStore.upsert(embeddedChunks);
-      return { vectorIds, warnings, state: SourceState.RETRIEVAL_READY };
+
+      return { vectorIds, warnings, embeddingFailed: false, embeddingModel };
     } catch (error) {
       logger.error('ingestion_embedding_or_vector_failed', {
         sourceType: metadata.sourceType,
         sourceName: metadata.sourceName,
         error: error instanceof Error ? error.message : 'unknown_error',
       });
-      // CRITICAL: return EMBEDDING_FAILED state so frontend can disable querying
-      return {
-        vectorIds: [],
-        warnings: ['Unable to generate embeddings right now. Source metadata was saved, but retrieval may be limited.'],
-        state: SourceState.EMBEDDING_FAILED,
-      };
+      warnings.push(
+        'Unable to generate embeddings right now. Source metadata was saved, but semantic retrieval is disabled for this source. ' +
+        'Fix your embedding API configuration and re-upload.',
+      );
+      return { vectorIds: [], warnings, embeddingFailed: true, embeddingModel: 'none' };
     }
   }
 }

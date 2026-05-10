@@ -24,7 +24,7 @@ export class OpenAiEmbedder implements Embedder {
     return chunks.map((chunk, index) => new EmbeddedChunk(chunk, embeddings[index], this.modelName, sessionId));
   }
 
-  public async embedQuery(text: string): Promise<number[]> {
+  public async embedQuery(text: string, _sourceIds?: string[]): Promise<number[]> {
     return this.embedText(text);
   }
 

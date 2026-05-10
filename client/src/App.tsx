@@ -12,7 +12,9 @@ type SourceCard = {
   chunkCount: number;
   vectorIds: string[];
   selected: boolean;
-  state?: string;
+  // NEW: explicit embedding state
+  embeddingFailed: boolean;
+  embeddingModel: string;
 };
 
 type ChatMessage = {
@@ -23,12 +25,11 @@ type ChatMessage = {
   isStreaming: boolean;
   embedderStatus?: 'primary' | 'fallback';
   groundingLevel?: string;
-  attribution?: Array<{ statement: string; source: string }>;
 };
 
 type Toast = {
   id: string;
-  kind: 'info' | 'success' | 'error';
+  kind: 'info' | 'success' | 'error' | 'warning';
   message: string;
 };
 
@@ -37,24 +38,70 @@ type Toast = {
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 const extractFriendlyMessage = (error: unknown, fallbackMessage: string): string => {
-  if (error instanceof ApiError) {
-    return error.message;
-  }
+  if (error instanceof ApiError) return error.message;
   return fallbackMessage;
 };
 
 const SOURCE_TYPE_ICONS: Record<string, string> = {
-  pdf: '📄',
-  txt: '📝',
-  md: '📋',
-  xml: '📄',
-  csv: '📊',
-  web: '🌐',
-  audio: '🎙️',
-  youtube: '▶️',
+  pdf: '📄', txt: '📝', md: '📋', xml: '📄', csv: '📊',
+  web: '🌐', audio: '🎙️', youtube: '▶️',
 };
 
 const getSourceIcon = (kind: string) => SOURCE_TYPE_ICONS[kind.toLowerCase()] ?? '📎';
+
+// Grounding level display config
+const GROUNDING_DISPLAY: Record<string, { label: string; className: string; icon: string }> = {
+  NO_SOURCES:       { label: 'No Sources',        className: 'grounding--none',     icon: '○' },
+  METADATA_ONLY:    { label: 'Metadata Only',      className: 'grounding--meta',     icon: '⚠' },
+  FALLBACK_INDEX:   { label: 'Keyword Index',      className: 'grounding--fallback', icon: '⚡' },
+  PARTIAL_INDEX:    { label: 'Partial Index',      className: 'grounding--partial',  icon: '◑' },
+  CHUNKS_RETRIEVED: { label: 'Grounded',           className: 'grounding--ok',       icon: '✓' },
+  STRONG_GROUNDED:  { label: 'Strong Match',       className: 'grounding--strong',   icon: '✦' },
+};
+
+/* ─── Source Card Component ────────────────────────────────────────── */
+
+function SourceCardItem({
+  source,
+  onToggle,
+}: {
+  source: SourceCard;
+  onToggle: (uid: string) => void;
+}) {
+  const embeddingBadge = source.embeddingFailed
+    ? <span className="embedding-badge embedding-badge--failed" title="Embeddings failed — this source cannot be semantically searched">⚠ Embedding Failed</span>
+    : source.embeddingModel === 'local-hash-embedder'
+    ? <span className="embedding-badge embedding-badge--fallback" title="Using keyword-based fallback index — semantic search quality is reduced">⚡ Keyword Only</span>
+    : null;
+
+  return (
+    <button
+      key={source.uid}
+      className={`source-card ${source.selected ? 'source-card--selected' : ''} ${source.embeddingFailed ? 'source-card--failed' : ''}`}
+      onClick={() => onToggle(source.uid)}
+      type="button"
+      id={`source-${source.uid}`}
+    >
+      <div className="source-card-check">
+        <div className={`checkbox ${source.selected ? 'checkbox--checked' : ''}`}>
+          {source.selected && (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          )}
+        </div>
+      </div>
+      <div className="source-card-icon">{getSourceIcon(source.kind)}</div>
+      <div className="source-card-info">
+        <div className="source-card-name">{source.name}</div>
+        <div className="source-card-meta">
+          {source.kind.toUpperCase()} · {source.chunkCount} chunk{source.chunkCount === 1 ? '' : 's'}
+        </div>
+        {embeddingBadge}
+      </div>
+    </button>
+  );
+}
 
 /* ─── Sidebar (Sources Panel) ──────────────────────────────────────── */
 
@@ -70,14 +117,7 @@ type SourcesPanelProps = {
 };
 
 const SourcesPanel = memo(function SourcesPanel({
-  sources,
-  uploading,
-  onOpenModal,
-  onToggleSource,
-  onSelectAll,
-  onDeselectAll,
-  userApiKey,
-  onApiKeyChange,
+  sources, uploading, onOpenModal, onToggleSource, onSelectAll, onDeselectAll, userApiKey, onApiKeyChange,
 }: SourcesPanelProps) {
   const selectedCount = sources.filter((s) => s.selected).length;
 
@@ -102,56 +142,24 @@ const SourcesPanel = memo(function SourcesPanel({
         Add sources
       </button>
 
-      {/* Source Selection Controls */}
       {sources.length > 0 && (
         <div className="source-selection-bar">
-          <button type="button" className="btn-text" onClick={onSelectAll} id="select-all-btn">
-            Select all
-          </button>
+          <button type="button" className="btn-text" onClick={onSelectAll}>Select all</button>
           <span className="selection-divider">·</span>
-          <button type="button" className="btn-text" onClick={onDeselectAll} id="deselect-all-btn">
-            Deselect all
-          </button>
+          <button type="button" className="btn-text" onClick={onDeselectAll}>Deselect all</button>
           <span className="selected-count">{selectedCount} selected</span>
         </div>
       )}
 
-      {/* Source List */}
       <div className="source-list" id="source-list">
         {sources.length ? (
           sources.map((source) => (
-            <button
-              key={source.uid}
-              className={`source-card ${source.selected ? 'source-card--selected' : ''}`}
-              onClick={() => onToggleSource(source.uid)}
-              type="button"
-              id={`source-${source.uid}`}
-            >
-              <div className="source-card-check">
-                <div className={`checkbox ${source.selected ? 'checkbox--checked' : ''}`}>
-                  {source.selected && (
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  )}
-                </div>
-              </div>
-              <div className="source-card-icon">{getSourceIcon(source.kind)}</div>
-              <div className="source-card-info">
-                <div className="source-card-name">{source.name}</div>
-                <div className="source-card-meta">
-                  {source.kind.toUpperCase()} · {source.chunkCount} chunks
-                  {source.state === 'embedding_failed' && (
-                    <span className="source-state-error"> (⚠️ Indexing Failed)</span>
-                  )}
-                </div>
-              </div>
-            </button>
+            <SourceCardItem key={source.uid} source={source} onToggle={onToggleSource} />
           ))
         ) : (
           <div className="empty-sources">
             <div className="empty-sources-icon">
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
                 <polyline points="14 2 14 8 20 8" />
                 <line x1="12" y1="18" x2="12" y2="12" />
@@ -159,7 +167,7 @@ const SourcesPanel = memo(function SourcesPanel({
               </svg>
             </div>
             <p>Add your first source</p>
-            <small>Upload PDFs, paste URLs, or add YouTube videos to get started</small>
+            <small>Upload PDFs, paste URLs, or add text to get started</small>
           </div>
         )}
       </div>
@@ -192,12 +200,7 @@ const SourcesPanel = memo(function SourcesPanel({
 type ModalType = 'main' | 'websites' | 'copied-text';
 
 const AddSourceModal = memo(function AddSourceModal({
-  isOpen,
-  onClose,
-  uploading,
-  onFileSelected,
-  onIngestUrl,
-  onIngestText,
+  isOpen, onClose, uploading, onFileSelected, onIngestUrl, onIngestText,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -212,36 +215,14 @@ const AddSourceModal = memo(function AddSourceModal({
   const [textTitle, setTextTitle] = useState('');
 
   useEffect(() => {
-    if (!isOpen) {
-      setView('main');
-      setUrl('');
-      setText('');
-      setTextTitle('');
-    }
+    if (!isOpen) { setView('main'); setUrl(''); setText(''); setTextTitle(''); }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      await onFileSelected(file);
-      onClose();
-    }
-  };
-
-  const handleUrl = async () => {
-    if (url.trim()) {
-      await onIngestUrl(url.trim());
-      onClose();
-    }
-  };
-
-  const handleText = async () => {
-    if (text.trim()) {
-      await onIngestText(text.trim(), textTitle.trim() || 'Copied Text');
-      onClose();
-    }
+    if (file) { await onFileSelected(file); onClose(); }
   };
 
   return (
@@ -258,7 +239,7 @@ const AddSourceModal = memo(function AddSourceModal({
               </div>
             </div>
             <div className="loading-text">Ingesting Source...</div>
-            <div className="loading-subtext">This may take a few seconds depending on document size</div>
+            <div className="loading-subtext">Parsing, chunking, and embedding your document</div>
           </div>
         )}
         <div className="modal-header">
@@ -283,7 +264,6 @@ const AddSourceModal = memo(function AddSourceModal({
                 </svg>
                 <input className="modal-search-input" placeholder="Search the web for new sources" disabled />
               </div>
-
               <div className="modal-options-grid">
                 <label className="source-option-btn">
                   <input type="file" accept=".pdf,.txt,.md,.xml,.csv,.xlsx,.mp3,.wav,.m4a,.aac,.ogg,.flac,.mp4,.mov,.avi" style={{ display: 'none' }} onChange={handleFile} disabled={uploading} />
@@ -292,7 +272,6 @@ const AddSourceModal = memo(function AddSourceModal({
                   </svg>
                   <span className="source-option-label">Upload files</span>
                 </label>
-
                 <button className="source-option-btn" onClick={() => setView('websites')}>
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
@@ -300,7 +279,6 @@ const AddSourceModal = memo(function AddSourceModal({
                   </svg>
                   <span className="source-option-label">Websites</span>
                 </button>
-
                 <button className="source-option-btn" onClick={() => setView('copied-text')}>
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
@@ -311,59 +289,32 @@ const AddSourceModal = memo(function AddSourceModal({
               </div>
             </>
           )}
-
           {view === 'websites' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <input
-                className="modal-search-input"
-                style={{ paddingLeft: '16px' }}
-                placeholder="https://example.com"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                autoFocus
-              />
+              <input className="modal-search-input" style={{ paddingLeft: '16px' }} placeholder="https://example.com" value={url} onChange={(e) => setUrl(e.target.value)} autoFocus />
               <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Paste a URL to scrape and index its content.</p>
             </div>
           )}
-
           {view === 'copied-text' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <input
-                className="modal-search-input"
-                style={{ paddingLeft: '16px' }}
-                placeholder="Title (optional)"
-                value={textTitle}
-                onChange={(e) => setTextTitle(e.target.value)}
-              />
-              <textarea
-                className="modal-text-area"
-                placeholder="Paste your text here..."
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                autoFocus
-              />
+              <input className="modal-search-input" style={{ paddingLeft: '16px' }} placeholder="Title (optional)" value={textTitle} onChange={(e) => setTextTitle(e.target.value)} />
+              <textarea className="modal-text-area" placeholder="Paste your text here..." value={text} onChange={(e) => setText(e.target.value)} autoFocus />
             </div>
           )}
         </div>
 
         <div className="modal-footer">
-          {view !== 'main' && (
-            <button className="btn-secondary" onClick={() => setView('main')}>Back</button>
-          )}
+          {view !== 'main' && <button className="btn-secondary" onClick={() => setView('main')}>Back</button>}
           <button className="btn-secondary" onClick={onClose}>Cancel</button>
-          {view === 'websites' && (
-            <button className="btn-primary" onClick={handleUrl} disabled={!url.trim() || uploading}>Add</button>
-          )}
-          {view === 'copied-text' && (
-            <button className="btn-primary" onClick={handleText} disabled={!text.trim() || uploading}>Add</button>
-          )}
+          {view === 'websites' && <button className="btn-primary" onClick={async () => { if (url.trim()) { await onIngestUrl(url.trim()); onClose(); } }} disabled={!url.trim() || uploading}>Add</button>}
+          {view === 'copied-text' && <button className="btn-primary" onClick={async () => { if (text.trim()) { await onIngestText(text.trim(), textTitle.trim() || 'Copied Text'); onClose(); } }} disabled={!text.trim() || uploading}>Add</button>}
         </div>
       </div>
     </div>
   );
 });
 
-/* ─── Chat Panel (Middle) ──────────────────────────────────────────── */
+/* ─── Chat Panel ───────────────────────────────────────────────────── */
 
 type ChatPanelProps = {
   messages: ChatMessage[];
@@ -399,7 +350,7 @@ const ChatPanel = memo(function ChatPanel({ messages, sourceCount, asking, statu
   const suggestions = [
     'Summarize all sources',
     'What are the key ideas?',
-    'Create a study guide',
+    'What files do I have?',
     'Find connections between sources',
   ];
 
@@ -425,35 +376,24 @@ const ChatPanel = memo(function ChatPanel({ messages, sourceCount, asking, statu
         {messages.length === 0 && (
           <div className="chat-welcome">
             <div className="welcome-icon">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
               </svg>
             </div>
             <h2 className="welcome-heading">Hello! How can I help?</h2>
-            <p className="welcome-sub">Ask anything about your uploaded sources. Responses are grounded in your materials with citations.</p>
+            <p className="welcome-sub">Ask anything about your uploaded sources. Responses are strictly grounded in your documents — no hallucination from filenames.</p>
             <div className="suggestion-chips">
-              {suggestions.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  className="suggestion-chip"
-                  onClick={() => {
-                    setDraft(suggestion);
-                  }}
-                >
-                  {suggestion}
-                </button>
+              {suggestions.map((s) => (
+                <button key={s} type="button" className="suggestion-chip" onClick={() => setDraft(s)}>{s}</button>
               ))}
             </div>
           </div>
         )}
-
         {messages.map((message) => (
           <MessageBubble key={message.id} message={message} />
         ))}
       </div>
 
-      {/* Composer */}
       <div className="composer-container" id="composer">
         <div className="composer-inner">
           <textarea
@@ -465,24 +405,16 @@ const ChatPanel = memo(function ChatPanel({ messages, sourceCount, asking, statu
             className="composer-textarea"
             id="composer-textarea"
           />
-          <button
-            type="button"
-            className="send-btn"
-            onClick={submit}
-            disabled={asking || !draft.trim()}
-            id="send-btn"
-          >
-            {asking ? (
-              <span className="spinner-small" />
-            ) : (
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <button type="button" className="send-btn" onClick={submit} disabled={asking || !draft.trim()} id="send-btn">
+            {asking ? <span className="spinner-small" /> : (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <line x1="22" y1="2" x2="11" y2="13" />
                 <polygon points="22 2 15 22 11 13 2 9 22 2" />
               </svg>
             )}
           </button>
         </div>
-        <div className="composer-hint">NotebookLM can make mistakes. Verify responses against your sources.</div>
+        <div className="composer-hint">NotebookLM only answers from your uploaded source content.</div>
       </div>
     </main>
   );
@@ -494,47 +426,32 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMe
   const [displayText, setDisplayText] = useState(message.response);
 
   useEffect(() => {
-    if (message.isStreaming) {
-      setDisplayText(message.response);
-      return;
-    }
-
-    if (!message.response) {
-      setDisplayText('');
-      return;
-    }
+    if (message.isStreaming) { setDisplayText(message.response); return; }
+    if (!message.response) { setDisplayText(''); return; }
 
     let cancelled = false;
     setDisplayText('');
     let index = 0;
     const step = Math.max(8, Math.ceil(message.response.length / 120));
     const timer = window.setInterval(() => {
-      if (cancelled) {
-        window.clearInterval(timer);
-        return;
-      }
+      if (cancelled) { window.clearInterval(timer); return; }
       index = Math.min(message.response.length, index + step);
       setDisplayText(message.response.slice(0, index));
-      if (index >= message.response.length) {
-        window.clearInterval(timer);
-      }
+      if (index >= message.response.length) window.clearInterval(timer);
     }, 14);
 
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [message.response, message.isStreaming]);
+
+  const groundingInfo = message.groundingLevel ? GROUNDING_DISPLAY[message.groundingLevel] : null;
 
   return (
     <div className="message-group">
-      {/* User message */}
       <div className="message-user">
         <div className="user-avatar">U</div>
         <div className="user-text">{message.query}</div>
       </div>
 
-      {/* AI response */}
       <div className="message-ai">
         <div className="ai-avatar">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -543,17 +460,10 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMe
         </div>
         <div className="ai-content">
           <div className="ai-meta-row">
-            {message.groundingLevel && (
-              <div className={`grounding-indicator ${message.groundingLevel}`}>
-                {message.groundingLevel === 'strong_grounded_context' && '🛡️ Strong Grounding'}
-                {message.groundingLevel === 'chunks_retrieved' && '⚡ Context Retrieved'}
-                {message.groundingLevel === 'metadata_only' && '⚠️ Metadata Only'}
-                {message.groundingLevel === 'no_sources' && '🌐 General Knowledge'}
-              </div>
-            )}
-            {message.embedderStatus && message.embedderStatus === 'fallback' && (
-              <div className="embedder-indicator fallback">
-                ⚠️ Search Limited
+            {groundingInfo && (
+              <div className={`grounding-indicator ${groundingInfo.className}`} title={`Grounding level: ${message.groundingLevel}`}>
+                <span className="grounding-icon">{groundingInfo.icon}</span>
+                {groundingInfo.label}
               </div>
             )}
           </div>
@@ -567,8 +477,6 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMe
               <ReactMarkdown>{displayText || 'No answer returned.'}</ReactMarkdown>
             </div>
           )}
-
-          {/* Citations removed per requirements */}
         </div>
       </div>
     </div>
@@ -577,13 +485,10 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMe
 
 /* ─── Studio Panel (Right) ─────────────────────────────────────────── */
 
-type StudioPanelProps = {
-  sources: SourceCard[];
-  messages: ChatMessage[];
-};
-
-const StudioPanel = memo(function StudioPanel({ sources, messages }: StudioPanelProps) {
+const StudioPanel = memo(function StudioPanel({ sources, messages }: { sources: SourceCard[]; messages: ChatMessage[] }) {
   const totalChunks = sources.reduce((acc, s) => acc + s.chunkCount, 0);
+  const failedCount = sources.filter((s) => s.embeddingFailed).length;
+  const indexedCount = sources.filter((s) => !s.embeddingFailed).length;
 
   return (
     <aside className="studio-panel" id="studio-panel">
@@ -591,22 +496,17 @@ const StudioPanel = memo(function StudioPanel({ sources, messages }: StudioPanel
         <h2 className="panel-heading">Studio</h2>
       </div>
 
-      {/* Audio Overview card */}
       <div className="studio-card studio-card--audio">
         <div className="studio-card-icon">🎙️</div>
         <div className="studio-card-content">
           <div className="studio-card-title">Audio Overview</div>
           <div className="studio-card-desc">Generate a podcast-style discussion of your sources</div>
         </div>
-        <button type="button" className="btn-studio" disabled id="generate-audio-btn">
-          Coming soon
-        </button>
+        <button type="button" className="btn-studio" disabled>Coming soon</button>
       </div>
 
-      {/* Notebook guide */}
       <div className="studio-section">
         <div className="studio-section-title">Notebook guide</div>
-
         <div className="guide-actions">
           {[
             { label: 'FAQ', icon: '❓', id: 'guide-faq' },
@@ -623,7 +523,6 @@ const StudioPanel = memo(function StudioPanel({ sources, messages }: StudioPanel
         </div>
       </div>
 
-      {/* Stats */}
       <div className="studio-section">
         <div className="studio-section-title">Session stats</div>
         <div className="stats-grid">
@@ -644,9 +543,25 @@ const StudioPanel = memo(function StudioPanel({ sources, messages }: StudioPanel
             <div className="stat-label">With citations</div>
           </div>
         </div>
+
+        {/* Embedding health summary */}
+        {sources.length > 0 && (
+          <div className="embedding-health">
+            <div className="studio-section-title" style={{ marginTop: '10px' }}>Index health</div>
+            <div className="health-row">
+              <span className="health-dot health-dot--ok" />
+              <span>{indexedCount} source{indexedCount !== 1 ? 's' : ''} indexed</span>
+            </div>
+            {failedCount > 0 && (
+              <div className="health-row health-row--warn">
+                <span className="health-dot health-dot--fail" />
+                <span>{failedCount} source{failedCount !== 1 ? 's' : ''} failed — re-upload to fix</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Recent citations */}
       {messages.length > 0 && (
         <div className="studio-section">
           <div className="studio-section-title">Recent citations</div>
@@ -681,7 +596,7 @@ const Toasts = memo(function Toasts({ toasts }: { toasts: Toast[] }) {
       {toasts.map((toast) => (
         <div key={toast.id} className={`toast toast--${toast.kind}`}>
           <span className="toast-icon">
-            {toast.kind === 'success' ? '✓' : toast.kind === 'error' ? '✕' : 'ℹ'}
+            {toast.kind === 'success' ? '✓' : toast.kind === 'error' ? '✕' : toast.kind === 'warning' ? '⚠' : 'ℹ'}
           </span>
           {toast.message}
         </div>
@@ -707,9 +622,7 @@ export default function App() {
   const pushToast = (message: string, kind: Toast['kind']) => {
     const id = createId();
     setToasts((current) => [...current, { id, kind, message }]);
-    window.setTimeout(() => {
-      setToasts((current) => current.filter((item) => item.id !== id));
-    }, 4000);
+    window.setTimeout(() => setToasts((current) => current.filter((item) => item.id !== id)), 5000);
   };
 
   const appendSource = (summary: IngestSummary) => {
@@ -722,19 +635,32 @@ export default function App() {
         chunkCount: summary.chunkCount,
         vectorIds: summary.vectorIds,
         selected: true,
-        state: summary.state,
+        embeddingFailed: summary.embeddingFailed,
+        embeddingModel: summary.embeddingModel,
       },
       ...current.filter((item) => item.id !== summary.id),
     ]);
-    summary.warnings?.forEach((warning) => pushToast(warning, 'info'));
+
+    // Show appropriate toast based on embedding result
+    if (summary.embeddingFailed) {
+      pushToast(
+        `⚠ "${summary.name}" was saved but embeddings failed. Semantic retrieval is disabled for this source.`,
+        'warning',
+      );
+    } else if (summary.embeddingModel === 'local-hash-embedder') {
+      pushToast(
+        `⚡ "${summary.name}" indexed with keyword fallback (semantic embedding failed). Search quality is reduced.`,
+        'warning',
+      );
+    } else {
+      pushToast('Source added and indexed successfully.', 'success');
+    }
+
+    // Also show any server-side warnings
+    summary.warnings?.filter((w) => !w.includes('embedding')).forEach((w) => pushToast(w, 'info'));
   };
 
-  const toggleSource = (uid: string) => {
-    setSources((current) =>
-      current.map((s) => (s.uid === uid ? { ...s, selected: !s.selected } : s)),
-    );
-  };
-
+  const toggleSource = (uid: string) => setSources((c) => c.map((s) => s.uid === uid ? { ...s, selected: !s.selected } : s));
   const selectAll = () => setSources((c) => c.map((s) => ({ ...s, selected: true })));
   const deselectAll = () => setSources((c) => c.map((s) => ({ ...s, selected: false })));
 
@@ -744,8 +670,10 @@ export default function App() {
     try {
       const summary = await ingestFile(file, userId, sessionId);
       appendSource(summary);
-      setStatus(`Indexed ${summary.chunkCount} chunks from ${summary.name}`);
-      pushToast('Source added successfully.', 'success');
+      setStatus(summary.embeddingFailed
+        ? `⚠ Saved "${summary.name}" — embedding failed, retrieval disabled`
+        : `Indexed ${summary.chunkCount} chunks from "${summary.name}"`
+      );
     } catch (error) {
       const friendly = extractFriendlyMessage(error, 'Source ingestion failed.');
       setStatus(friendly);
@@ -761,8 +689,7 @@ export default function App() {
     try {
       const summary = await ingestUrl(url, userId, sessionId);
       appendSource(summary);
-      setStatus(`Indexed ${summary.chunkCount} chunks from ${summary.name}`);
-      pushToast('URL source added.', 'success');
+      setStatus(`Indexed ${summary.chunkCount} chunks from "${summary.name}"`);
     } catch (error) {
       const friendly = extractFriendlyMessage(error, 'Source ingestion failed.');
       setStatus(friendly);
@@ -779,7 +706,6 @@ export default function App() {
       const summary = await ingestText(text, title, userId, sessionId);
       appendSource(summary);
       setStatus(`Indexed ${summary.chunkCount} chunks`);
-      pushToast('Text source added.', 'success');
     } catch (error) {
       const friendly = extractFriendlyMessage(error, 'Source ingestion failed.');
       setStatus(friendly);
@@ -795,18 +721,23 @@ export default function App() {
     setStatus('Generating answer...');
     setMessages((current) => [
       ...current,
-      {
-        id: messageId,
-        query,
-        response: '',
-        sourcesUsed: [],
-        isStreaming: true,
-      },
+      { id: messageId, query, response: '', sourcesUsed: [], isStreaming: true },
     ]);
 
     try {
-      const selectedSourceFiles = sources.filter((s) => s.selected).map((s) => s.id); // FIXED: use .id (sourceId)
-      const result = await askQuestion(query, userId, sessionId, userApiKey, selectedSourceFiles);
+      const selectedSources = sources.filter((s) => s.selected);
+      const selectedSourceFiles = selectedSources.map((s) => s.id);
+
+      // NEW: Pass source state info so the backend can route correctly
+      const sourceStateInfo = selectedSources.map((s) => ({
+        sourceId: s.id,
+        embeddingFailed: s.embeddingFailed,
+        embeddingModel: s.embeddingModel,
+        name: s.name,
+      }));
+
+      const result = await askQuestion(query, userId, sessionId, userApiKey, selectedSourceFiles, sourceStateInfo);
+
       setMessages((current) =>
         current.map((message) =>
           message.id === messageId
@@ -817,30 +748,29 @@ export default function App() {
                 isStreaming: false,
                 embedderStatus: result.embedderStatus,
                 groundingLevel: result.groundingLevel,
-                attribution: result.attribution,
               }
             : message,
         ),
       );
-      result.warnings?.forEach((warning) => pushToast(warning, 'info'));
-      const statusMap: Record<string, string> = {
-        strong_grounded_context: 'Answered with strong grounding.',
-        chunks_retrieved: 'Answered using source context.',
-        metadata_only: 'Answered using document titles only.',
-        no_sources: 'Answered from general knowledge.',
-      };
-      setStatus(statusMap[result.groundingLevel ?? ''] ?? (result.mode === 'rag' ? 'Answered using sources.' : 'Answered in chat mode.'));
+
+      // Show grounding-aware warnings
+      result.warnings?.forEach((w) => {
+        const kind = w.includes('failed') || w.includes('unavailable') ? 'warning' : 'info';
+        pushToast(w, kind);
+      });
+
+      const groundingInfo = result.groundingLevel ? GROUNDING_DISPLAY[result.groundingLevel] : null;
+      const groundingLabel = groundingInfo ? `${groundingInfo.icon} ${groundingInfo.label}` : '';
+      setStatus(result.mode === 'rag'
+        ? `Answered using sources${groundingLabel ? ` — ${groundingLabel}` : ''}.`
+        : 'Answered in chat mode.'
+      );
     } catch (error) {
       const friendly = extractFriendlyMessage(error, 'Unable to generate a response right now.');
       setMessages((current) =>
         current.map((message) =>
           message.id === messageId
-            ? {
-                ...message,
-                response: 'I am unable to generate a response right now. Please try again in a moment.',
-                sourcesUsed: [],
-                isStreaming: false,
-              }
+            ? { ...message, response: 'Unable to generate a response right now. Please try again in a moment.', sourcesUsed: [], isStreaming: false }
             : message,
         ),
       );
@@ -866,14 +796,17 @@ export default function App() {
 
       <ChatPanel
         messages={messages}
-        sourceCount={sources.filter(s => s.selected).length}
+        sourceCount={sources.filter((s) => s.selected).length}
         asking={asking}
         status={status}
         userApiKey={userApiKey}
         onSubmit={handleAsk}
       />
 
-      <StudioPanel sources={sources} messages={messages} />
+      <StudioPanel
+        sources={sources}
+        messages={messages}
+      />
 
       <AddSourceModal
         isOpen={isModalOpen}
