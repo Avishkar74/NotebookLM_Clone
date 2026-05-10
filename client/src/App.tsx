@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { ApiError, askQuestion, ingestFile, ingestUrl, previewUrl, type IngestSummary, type RagAnswer } from './api.js';
+import { ApiError, askQuestion, ingestFile, ingestUrl, ingestText, previewUrl, type IngestSummary, type RagAnswer } from './api.js';
 
 /* ─── Types ────────────────────────────────────────────────────────── */
 
@@ -20,6 +20,7 @@ type ChatMessage = {
   response: string;
   sourcesUsed: RagAnswer['sourcesUsed'];
   isStreaming: boolean;
+  embedderStatus?: 'primary' | 'fallback';
 };
 
 type Toast = {
@@ -43,6 +44,8 @@ const SOURCE_TYPE_ICONS: Record<string, string> = {
   pdf: '📄',
   txt: '📝',
   md: '📋',
+  xml: '📄',
+  csv: '📊',
   web: '🌐',
   audio: '🎙️',
   youtube: '▶️',
@@ -54,68 +57,25 @@ const getSourceIcon = (kind: string) => SOURCE_TYPE_ICONS[kind.toLowerCase()] ??
 
 type SourcesPanelProps = {
   sources: SourceCard[];
-  preview: Record<string, unknown> | null;
   uploading: boolean;
-  onFileSelected: (file: File) => Promise<void>;
-  onPreviewUrl: (url: string) => Promise<void>;
-  onIngestUrl: (url: string) => Promise<void>;
+  onOpenModal: () => void;
   onToggleSource: (uid: string) => void;
   onSelectAll: () => void;
   onDeselectAll: () => void;
+  userApiKey: string;
+  onApiKeyChange: (key: string) => void;
 };
 
 const SourcesPanel = memo(function SourcesPanel({
   sources,
-  preview,
   uploading,
-  onFileSelected,
-  onPreviewUrl,
-  onIngestUrl,
+  onOpenModal,
   onToggleSource,
   onSelectAll,
   onDeselectAll,
+  userApiKey,
+  onApiKeyChange,
 }: SourcesPanelProps) {
-  const [sourceUrl, setSourceUrl] = useState('');
-  const [isPreviewing, setIsPreviewing] = useState(false);
-  const [isAddingUrl, setIsAddingUrl] = useState(false);
-
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    await onFileSelected(file);
-    event.target.value = '';
-  };
-
-  const runPreview = async () => {
-    const url = sourceUrl.trim();
-    if (!url) return;
-    setIsPreviewing(true);
-    try {
-      await onPreviewUrl(url);
-    } finally {
-      setIsPreviewing(false);
-    }
-  };
-
-  const runIngest = async () => {
-    const url = sourceUrl.trim();
-    if (!url) return;
-    setIsAddingUrl(true);
-    try {
-      await onIngestUrl(url);
-      setSourceUrl('');
-    } finally {
-      setIsAddingUrl(false);
-    }
-  };
-
-  const handleUrlKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      void runIngest();
-    }
-  };
-
   const selectedCount = sources.filter((s) => s.selected).length;
 
   return (
@@ -125,77 +85,19 @@ const SourcesPanel = memo(function SourcesPanel({
         <span className="source-count-badge">{sources.length}</span>
       </div>
 
-      {/* Add Source Section */}
-      <div className="add-source-section">
-        <label className="upload-dropzone" id="upload-dropzone">
-          <input
-            type="file"
-            accept=".pdf,.txt,.md,.mp3,.wav,.m4a,.aac,.ogg,.flac,.mp4,.mov,.avi"
-            onChange={handleFileChange}
-            disabled={uploading}
-            id="file-input"
-          />
-          <div className="dropzone-icon">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
-            </svg>
-          </div>
-          <span className="dropzone-label">{uploading ? 'Processing...' : 'Upload source'}</span>
-          <small className="dropzone-hint">PDF, TXT, MD, audio, video</small>
-        </label>
-
-        <div className="url-input-row">
-          <input
-            value={sourceUrl}
-            onChange={(event) => setSourceUrl(event.target.value)}
-            onKeyDown={handleUrlKeyDown}
-            placeholder="Paste URL or YouTube link"
-            className="url-input"
-            id="url-input"
-          />
-          <div className="url-actions">
-            <button
-              type="button"
-              className="btn-icon"
-              onClick={runPreview}
-              disabled={uploading || isPreviewing || !sourceUrl.trim()}
-              title="Preview"
-              id="preview-btn"
-            >
-              {isPreviewing ? (
-                <span className="spinner-small" />
-              ) : (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </svg>
-              )}
-            </button>
-            <button
-              type="button"
-              className="btn-primary-small"
-              onClick={runIngest}
-              disabled={uploading || isAddingUrl || !sourceUrl.trim()}
-              id="add-url-btn"
-            >
-              {isAddingUrl ? <span className="spinner-small" /> : 'Add'}
-            </button>
-          </div>
-        </div>
+      <div className="sidebar-search-container">
+        <svg className="sidebar-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
+        </svg>
+        <input className="sidebar-search-input" placeholder="Search web for new sources" disabled />
       </div>
 
-      {/* Preview */}
-      {preview ? (
-        <div className="preview-card">
-          <div className="preview-card-header">
-            <span>Preview</span>
-            <span className="preview-badge">{String(preview.sourceType ?? 'web')}</span>
-          </div>
-          <pre className="preview-content">{JSON.stringify(preview, null, 2)}</pre>
-        </div>
-      ) : null}
+      <button className="sidebar-add-btn" onClick={onOpenModal} id="add-source-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+        Add sources
+      </button>
 
       {/* Source Selection Controls */}
       {sources.length > 0 && (
@@ -255,7 +157,189 @@ const SourcesPanel = memo(function SourcesPanel({
           </div>
         )}
       </div>
+
+      <div className="byok-section">
+        <div className="byok-header">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+          <span>Use personal OpenAI key</span>
+        </div>
+        <input
+          type="password"
+          className="byok-input"
+          placeholder="sk-..."
+          value={userApiKey}
+          onChange={(e) => onApiKeyChange(e.target.value)}
+        />
+        <div className="byok-disclaimer">
+          🔒 Your key is safe. It is not stored in our backend databases. It is kept securely in your browser's active memory and will be permanently lost as soon as you close or refresh this tab.
+        </div>
+      </div>
     </aside>
+  );
+});
+
+/* ─── Add Source Modal ────────────────────────────────────────────── */
+
+type ModalType = 'main' | 'websites' | 'copied-text';
+
+const AddSourceModal = memo(function AddSourceModal({
+  isOpen,
+  onClose,
+  uploading,
+  onFileSelected,
+  onIngestUrl,
+  onIngestText,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  uploading: boolean;
+  onFileSelected: (file: File) => Promise<void>;
+  onIngestUrl: (url: string) => Promise<void>;
+  onIngestText: (text: string, title: string) => Promise<void>;
+}) {
+  const [view, setView] = useState<ModalType>('main');
+  const [url, setUrl] = useState('');
+  const [text, setText] = useState('');
+  const [textTitle, setTextTitle] = useState('');
+
+  useEffect(() => {
+    if (!isOpen) {
+      setView('main');
+      setUrl('');
+      setText('');
+      setTextTitle('');
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      await onFileSelected(file);
+      onClose();
+    }
+  };
+
+  const handleUrl = async () => {
+    if (url.trim()) {
+      await onIngestUrl(url.trim());
+      onClose();
+    }
+  };
+
+  const handleText = async () => {
+    if (text.trim()) {
+      await onIngestText(text.trim(), textTitle.trim() || 'Copied Text');
+      onClose();
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-container" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3 className="modal-title">
+            {view === 'main' && 'Add sources'}
+            {view === 'websites' && 'Add website'}
+            {view === 'copied-text' && 'Add copied text'}
+          </h3>
+          <button className="btn-close" onClick={onClose}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="modal-body">
+          {view === 'main' && (
+            <>
+              <div className="modal-search-row">
+                <svg className="modal-search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
+                </svg>
+                <input className="modal-search-input" placeholder="Search the web for new sources" disabled />
+              </div>
+
+              <div className="modal-options-grid">
+                <label className="source-option-btn">
+                  <input type="file" accept=".pdf,.txt,.md,.xml,.csv,.xlsx,.mp3,.wav,.m4a,.aac,.ogg,.flac,.mp4,.mov,.avi" style={{ display: 'none' }} onChange={handleFile} disabled={uploading} />
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                  </svg>
+                  <span className="source-option-label">Upload files</span>
+                </label>
+
+                <button className="source-option-btn" onClick={() => setView('websites')}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+                  </svg>
+                  <span className="source-option-label">Websites</span>
+                </button>
+
+                <button className="source-option-btn" onClick={() => setView('copied-text')}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+                  </svg>
+                  <span className="source-option-label">Copied text</span>
+                </button>
+              </div>
+            </>
+          )}
+
+          {view === 'websites' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <input
+                className="modal-search-input"
+                style={{ paddingLeft: '16px' }}
+                placeholder="https://example.com"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                autoFocus
+              />
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>Paste a URL to scrape and index its content.</p>
+            </div>
+          )}
+
+          {view === 'copied-text' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <input
+                className="modal-search-input"
+                style={{ paddingLeft: '16px' }}
+                placeholder="Title (optional)"
+                value={textTitle}
+                onChange={(e) => setTextTitle(e.target.value)}
+              />
+              <textarea
+                className="modal-text-area"
+                placeholder="Paste your text here..."
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                autoFocus
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="modal-footer">
+          {view !== 'main' && (
+            <button className="btn-secondary" onClick={() => setView('main')}>Back</button>
+          )}
+          <button className="btn-secondary" onClick={onClose}>Cancel</button>
+          {view === 'websites' && (
+            <button className="btn-primary" onClick={handleUrl} disabled={!url.trim() || uploading}>Add</button>
+          )}
+          {view === 'copied-text' && (
+            <button className="btn-primary" onClick={handleText} disabled={!text.trim() || uploading}>Add</button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 });
 
@@ -266,10 +350,11 @@ type ChatPanelProps = {
   sourceCount: number;
   asking: boolean;
   status: string;
+  userApiKey: string;
   onSubmit: (query: string) => Promise<void>;
 };
 
-const ChatPanel = memo(function ChatPanel({ messages, sourceCount, asking, status, onSubmit }: ChatPanelProps) {
+const ChatPanel = memo(function ChatPanel({ messages, sourceCount, asking, status, userApiKey, onSubmit }: ChatPanelProps) {
   const [draft, setDraft] = useState('');
   const threadRef = useRef<HTMLDivElement | null>(null);
 
@@ -306,6 +391,9 @@ const ChatPanel = memo(function ChatPanel({ messages, sourceCount, asking, statu
           <div className="chat-subtitle">{status}</div>
         </div>
         <div className="chat-header-right">
+          <div className={`api-indicator ${userApiKey ? 'custom' : 'backend'}`}>
+            {userApiKey ? '🔑 Personal Key' : '☁️ Shared Proxy'}
+          </div>
           <div className="source-indicator">
             <span className="source-dot" />
             {sourceCount} source{sourceCount === 1 ? '' : 's'}
@@ -434,6 +522,13 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMe
           </svg>
         </div>
         <div className="ai-content">
+          <div className="ai-meta-row">
+            {message.embedderStatus && (
+              <div className={`embedder-indicator ${message.embedderStatus}`}>
+                {message.embedderStatus === 'primary' ? '⚡ Primary Search' : '⚠️ Fallback Search'}
+              </div>
+            )}
+          </div>
           {message.isStreaming ? (
             <div className="ai-text streaming">
               {displayText || 'Thinking...'}
@@ -445,20 +540,7 @@ const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMe
             </div>
           )}
 
-          {/* Citations */}
-          {message.sourcesUsed.length > 0 && !message.isStreaming && (
-            <div className="citations-section">
-              <div className="citations-label">Sources cited</div>
-              <div className="citations-list">
-                {message.sourcesUsed.map((source, index) => (
-                  <div className="citation-chip" key={`${source.reference}-${source.chunkId || source.sourceFile}-${index}`}>
-                    <span className="citation-num">{source.reference}</span>
-                    <span className="citation-name">{source.sourceFile}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Citations removed per requirements */}
         </div>
       </div>
     </div>
@@ -588,8 +670,9 @@ export default function App() {
   const [status, setStatus] = useState('Ready');
   const [uploading, setUploading] = useState(false);
   const [asking, setAsking] = useState(false);
-  const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [userApiKey, setUserApiKey] = useState('');
 
   const pushToast = (message: string, kind: Toast['kind']) => {
     const id = createId();
@@ -599,7 +682,6 @@ export default function App() {
     }, 4000);
   };
 
-  // Bug 5 fix: deduplication uses only `id`, not vectorIds
   const appendSource = (summary: IngestSummary) => {
     setSources((current) => [
       {
@@ -642,19 +724,6 @@ export default function App() {
     }
   };
 
-  const handleUrlPreview = async (url: string) => {
-    setStatus('Fetching preview...');
-    try {
-      setPreview(await previewUrl(url));
-      setStatus('Preview ready');
-    } catch (error) {
-      const friendly = extractFriendlyMessage(error, 'Unable to preview this URL right now.');
-      setStatus(friendly);
-      setPreview(null);
-      pushToast(friendly, 'error');
-    }
-  };
-
   const handleUrlIngest = async (url: string) => {
     setUploading(true);
     setStatus('Scraping and indexing URL...');
@@ -663,6 +732,23 @@ export default function App() {
       appendSource(summary);
       setStatus(`Indexed ${summary.chunkCount} chunks from ${summary.name}`);
       pushToast('URL source added.', 'success');
+    } catch (error) {
+      const friendly = extractFriendlyMessage(error, 'Source ingestion failed.');
+      setStatus(friendly);
+      pushToast(friendly, 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleTextIngest = async (text: string, title: string) => {
+    setUploading(true);
+    setStatus('Indexing text...');
+    try {
+      const summary = await ingestText(text, title);
+      appendSource(summary);
+      setStatus(`Indexed ${summary.chunkCount} chunks`);
+      pushToast('Text source added.', 'success');
     } catch (error) {
       const friendly = extractFriendlyMessage(error, 'Source ingestion failed.');
       setStatus(friendly);
@@ -688,7 +774,8 @@ export default function App() {
     ]);
 
     try {
-      const result = await askQuestion(query);
+      const selectedSourceFiles = sources.filter((s) => s.selected).map((s) => s.name);
+      const result = await askQuestion(query, 'notebook-user', 'default-session', userApiKey, selectedSourceFiles);
       setMessages((current) =>
         current.map((message) =>
           message.id === messageId
@@ -697,12 +784,13 @@ export default function App() {
                 response: result.response,
                 sourcesUsed: result.sourcesUsed,
                 isStreaming: false,
+                embedderStatus: result.embedderStatus,
               }
             : message,
         ),
       );
       result.warnings?.forEach((warning) => pushToast(warning, 'info'));
-      setStatus(result.mode === 'rag' ? 'Answered with citations.' : 'Answered in chat mode.');
+      setStatus(result.mode === 'rag' ? 'Answered using sources.' : 'Answered in chat mode.');
     } catch (error) {
       const friendly = extractFriendlyMessage(error, 'Unable to generate a response right now.');
       setMessages((current) =>
@@ -728,25 +816,34 @@ export default function App() {
     <div className="app-shell" id="app-shell">
       <SourcesPanel
         sources={sources}
-        preview={preview}
         uploading={uploading}
-        onFileSelected={handleFile}
-        onPreviewUrl={handleUrlPreview}
-        onIngestUrl={handleUrlIngest}
+        onOpenModal={() => setIsModalOpen(true)}
         onToggleSource={toggleSource}
         onSelectAll={selectAll}
         onDeselectAll={deselectAll}
+        userApiKey={userApiKey}
+        onApiKeyChange={setUserApiKey}
       />
 
       <ChatPanel
         messages={messages}
-        sourceCount={sources.length}
+        sourceCount={sources.filter(s => s.selected).length}
         asking={asking}
         status={status}
+        userApiKey={userApiKey}
         onSubmit={handleAsk}
       />
 
       <StudioPanel sources={sources} messages={messages} />
+
+      <AddSourceModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        uploading={uploading}
+        onFileSelected={handleFile}
+        onIngestUrl={handleUrlIngest}
+        onIngestText={handleTextIngest}
+      />
 
       <Toasts toasts={toasts} />
     </div>

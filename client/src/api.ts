@@ -33,6 +33,7 @@ export type RagAnswer = {
     relevanceScore: number;
   }>;
   retrievalCount: number;
+  embedderStatus?: 'primary' | 'fallback';
 };
 
 async function fetchWithTimeout(input: RequestInfo, init: RequestInit = {}, ms = 30_000): Promise<Response> {
@@ -108,12 +109,32 @@ export async function previewUrl(url: string): Promise<Record<string, unknown>> 
   return parseJson<Record<string, unknown>>(await fetchWithTimeout(`${API_BASE}/ingest/url/preview?url=${encodeURIComponent(url)}`, {}, 30_000));
 }
 
-export async function askQuestion(query: string, userId = 'notebook-user', sessionId = 'default-session'): Promise<RagAnswer> {
+export async function askQuestion(
+  query: string, 
+  userId = 'notebook-user', 
+  sessionId = 'default-session', 
+  userApiKey?: string,
+  sourceFiles?: string[]
+): Promise<RagAnswer> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (userApiKey) {
+    headers['Authorization'] = `Bearer ${userApiKey}`;
+  }
   return parseJson<RagAnswer>(
     await fetchWithTimeout(`${API_BASE}/query`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, userId, sessionId }),
+      headers,
+      body: JSON.stringify({ query, userId, sessionId, sourceFiles }),
     }, 120_000),
+  );
+}
+
+export async function ingestText(text: string, title: string, userId = 'notebook-user', sessionId = 'default-session'): Promise<IngestSummary> {
+  return parseJson<IngestSummary>(
+    await fetchWithTimeout(`${API_BASE}/ingest/text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, title, userId, sessionId }),
+    }, 60_000),
   );
 }

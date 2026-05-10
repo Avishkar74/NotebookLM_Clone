@@ -20,9 +20,6 @@ export class AssemblyAiAudioTranscriber implements AudioTranscriber {
 
     const transcript = await this.client.transcripts.transcribe({
       audio: absolutePath,
-      speaker_labels: true,
-      punctuate: true,
-      language_code: 'en',
     });
 
     if (transcript.status === 'error') {

@@ -6,6 +6,7 @@ import path from 'node:path';
 import type { AppContainer } from '../bootstrap.js';
 import { logger } from '../utils/logger.js';
 import { AppError } from '../errors/app-error.js';
+import { OpenAiLlmClient } from '../infrastructure/generation/openai-llm-client.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -92,6 +93,29 @@ export const jsonRoutes = (container: AppContainer) => {
     }
   });
 
+  router.post('/ingest/text', async (request, response, next) => {
+    try {
+      const text = String(request.body.text ?? '');
+      const title = String(request.body.title ?? 'Copied Text');
+      if (!text) {
+        response.status(400).json({ error: 'text is required' });
+        return;
+      }
+
+      const userId = String(request.body.userId ?? container.env.defaultUserId);
+      const sessionId = String(request.body.sessionId ?? container.env.defaultSessionId);
+
+      await container.memoryStore.ensureSession({ userId, sessionId, userName: container.env.defaultUserName });
+      const result = await container.ingestionService.ingestText({ userId, sessionId, text, title });
+      response.json(result);
+    } catch (error) {
+      logger.warn('route_ingest_text_failed', {
+        error: error instanceof Error ? error.message : 'unknown_error',
+      });
+      next(new AppError('text_ingestion_failed', 500, 'INGESTION_FAILED', 'Source ingestion failed. Please try again.'));
+    }
+  });
+
   router.post('/ingest/audio', upload.single('file'), async (request, response, next) => {
     let tempPath = '';
     try {
@@ -166,9 +190,22 @@ export const jsonRoutes = (container: AppContainer) => {
       const userId = String(request.body.userId ?? container.env.defaultUserId);
       const sessionId = String(request.body.sessionId ?? container.env.defaultSessionId);
       const topK = Number(request.body.topK ?? 10);
+      const sourceFiles = request.body.sourceFiles ? (request.body.sourceFiles as string[]) : undefined;
+
+      // Hybrid BYOK Logic
+      const authHeader = request.headers.authorization;
+      let llmClient: OpenAiLlmClient | undefined;
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const userKey = authHeader.substring(7).trim();
+        if (userKey && userKey !== 'undefined' && userKey !== 'null') {
+          // Official OpenAI (no baseURL) using the configured model
+          llmClient = new OpenAiLlmClient(userKey, undefined, container.env.model); 
+        }
+      }
 
       await container.memoryStore.ensureSession({ userId, sessionId, userName: container.env.defaultUserName });
-      const result = await container.ragPipeline.answer({ userId, sessionId, query, topK });
+      const result = await container.ragPipeline.answer({ userId, sessionId, query, topK, llmClient, sourceFiles });
       response.json(result);
     } catch (error) {
       next(error);

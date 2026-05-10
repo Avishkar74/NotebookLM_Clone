@@ -37,6 +37,7 @@ export class MilvusVectorStore implements VectorStore {
           { name: 'end_char', data_type: DataType.Int32 },
           { name: 'metadata', data_type: DataType.JSON },
           { name: 'embedding_model', data_type: DataType.VarChar, max_length: 128 },
+          { name: 'session_id', data_type: DataType.VarChar, max_length: 64 },
         ],
       });
     }
@@ -71,16 +72,32 @@ export class MilvusVectorStore implements VectorStore {
     return data.map((item) => String(item.id));
   }
 
-  public async search(queryVector: number[], limit: number): Promise<RetrievedChunk[]> {
+  public async search(queryVector: number[], limit: number, filter?: { sessionId?: string }): Promise<RetrievedChunk[]> {
     await this.ensureCollection();
-    const response: any = await this.client.search({
+    
+    const searchParams: any = {
       collection_name: this.collectionName,
       data: [queryVector],
       anns_field: 'vector',
       limit,
-      output_fields: ['id', 'content', 'source_file', 'source_type', 'page_number', 'chunk_index', 'start_char', 'end_char', 'metadata', 'embedding_model'],
+      output_fields: ['id', 'content', 'source_file', 'source_type', 'page_number', 'chunk_index', 'start_char', 'end_char', 'metadata', 'embedding_model', 'session_id'],
       params: { nprobe: 16 },
-    });
+    };
+
+    const filters: string[] = [];
+    if (filter?.sessionId) {
+      filters.push(`session_id == \"${filter.sessionId}\"`);
+    }
+    if (filter?.sourceFiles && filter.sourceFiles.length > 0) {
+      const filesStr = filter.sourceFiles.map((f) => `\"${f}\"`).join(', ');
+      filters.push(`source_file in [${filesStr}]`);
+    }
+
+    if (filters.length > 0) {
+      searchParams.filter = filters.join(' && ');
+    }
+
+    const response: any = await this.client.search(searchParams);
 
     const rows = response?.results ?? [];
     return rows.map((row: any) => {

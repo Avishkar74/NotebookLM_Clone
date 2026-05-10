@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-export type SourceType = 'pdf' | 'txt' | 'md' | 'web' | 'audio';
+export type SourceType = 'pdf' | 'txt' | 'md' | 'web' | 'audio' | 'xml' | 'csv';
 
 export interface CitationInfo {
   sourceFile: string;
@@ -54,12 +54,14 @@ export class EmbeddedChunk {
     public readonly chunk: DocumentChunk,
     public readonly embedding: number[],
     public readonly embeddingModel: string,
+    public readonly sessionId?: string,
   ) {}
 
   public toVectorRecord(): Record<string, unknown> {
     return {
       id: this.chunk.chunkId,
       vector: this.embedding,
+      session_id: this.sessionId ?? 'default',
       content: this.chunk.content,
       source_file: this.chunk.sourceFile,
       source_type: this.chunk.sourceType,
@@ -106,6 +108,7 @@ export interface RagAnswer {
   mode?: 'chat' | 'rag';
   warnings?: string[];
   generationTokens?: number;
+  embedderStatus?: 'primary' | 'fallback';
 }
 
 export interface IngestSummary {

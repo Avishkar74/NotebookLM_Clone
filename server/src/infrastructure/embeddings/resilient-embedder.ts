@@ -10,9 +10,9 @@ export class ResilientEmbedder implements Embedder {
     private readonly fallback: Embedder,
   ) {}
 
-  public async embedDocuments(chunks: DocumentChunk[]): Promise<EmbeddedChunk[]> {
+  public async embedDocuments(chunks: DocumentChunk[], sessionId?: string): Promise<EmbeddedChunk[]> {
     try {
-      const result = await this.primary.embedDocuments(chunks);
+      const result = await this.primary.embedDocuments(chunks, sessionId);
       this.lastDocumentEmbedder = 'primary';
       return result;
     } catch (error) {
@@ -21,7 +21,7 @@ export class ResilientEmbedder implements Embedder {
         chunkCount: chunks.length,
       });
       this.lastDocumentEmbedder = 'fallback';
-      return this.fallback.embedDocuments(chunks);
+      return this.fallback.embedDocuments(chunks, sessionId);
     }
   }
 
@@ -53,6 +53,10 @@ export class ResilientEmbedder implements Embedder {
     } catch {
       return this.fallback.getDimension();
     }
+  }
+
+  public getStatus(): 'primary' | 'fallback' {
+    return this.lastDocumentEmbedder || 'primary';
   }
 }
 

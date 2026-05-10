@@ -6,7 +6,7 @@ export class RagPipeline {
   constructor(
     private readonly embedder: Embedder,
     private readonly vectorStore: VectorStore,
-    private readonly llmClient: LLMClient,
+    private readonly defaultLlmClient: LLMClient,
     private readonly memoryStore: MemoryStore,
   ) {}
 
@@ -17,6 +17,8 @@ export class RagPipeline {
     topK?: number;
     maxChunks?: number;
     maxContextChars?: number;
+    llmClient?: LLMClient;
+    sourceFiles?: string[];
   }): Promise<RagAnswer> {
     const query = input.query.trim();
     if (!query) {
@@ -30,7 +32,7 @@ export class RagPipeline {
     }
 
     const warnings: string[] = [];
-    const searchResults = await this.tryRetrieve(query, input.topK ?? 10, warnings);
+    const searchResults = await this.tryRetrieve(query, input.sessionId, input.topK ?? 10, warnings, input.sourceFiles);
     const hasContext = searchResults.length > 0;
 
     const { context, sources } = this.formatContext(searchResults, input.maxChunks ?? 8, input.maxContextChars ?? 4000);
@@ -45,12 +47,8 @@ export class RagPipeline {
 
     const prompt = hasContext
       ? `You are an AI assistant that answers questions using only the provided source context.
-
-Citation rules:
-1. Every factual statement must include citations like [1], [2], etc.
-2. Only use facts present in the context.
-3. If the context does not contain the answer, say so clearly.
-4. Prefer concise but complete answers.
+Provide a clear, direct answer based on the facts in the context.
+If the context does not contain the answer, say so clearly.
 
 Conversation memory context:
 ${memoryContext || 'No prior memory available.'}
@@ -60,7 +58,7 @@ ${context}
 
 Question: ${query}
 
-Answer with citations:`
+Answer:`
       : `You are a research assistant in chat mode.
 
 You currently have no retrievable source context or retrieval is unavailable. Provide the best helpful answer from general knowledge.
@@ -73,9 +71,10 @@ Question: ${query}
 
 Answer clearly and concisely:`;
 
+    const activeLlmClient = input.llmClient ?? this.defaultLlmClient;
     let response = '';
     try {
-      response = await this.llmClient.generate(prompt, { maxTokens: 2000 });
+      response = await activeLlmClient.generate(prompt, { maxTokens: 2000 });
     } catch (error) {
       logger.error('llm_generation_failed', {
         error: error instanceof Error ? error.message : 'unknown_error',
@@ -91,6 +90,7 @@ Answer clearly and concisely:`;
       retrievalCount: searchResults.length,
       mode: hasContext ? 'rag' : 'chat',
       warnings,
+      embedderStatus: this.getEmbedderStatus(),
     };
 
     try {
@@ -115,8 +115,13 @@ Answer clearly and concisely:`;
     sessionId: string;
     topK?: number;
     summaryLength?: 'short' | 'medium' | 'long';
+    llmClient?: LLMClient;
   }): Promise<RagAnswer> {
-    const searchResults = await this.vectorStore.search(await this.embedder.embedQuery('main topics key findings important information overview'), input.topK ?? 15);
+    const searchResults = await this.vectorStore.search(
+      await this.embedder.embedQuery('main topics key findings important information overview'),
+      input.topK ?? 15,
+      { sessionId: input.sessionId }
+    );
     if (!searchResults.length) {
       return {
         query: 'Document Summary',
@@ -133,8 +138,7 @@ Answer clearly and concisely:`;
       long: 'Provide a detailed summary with multiple sections covering all major topics and supporting details.',
     }[input.summaryLength ?? 'medium'];
 
-    const prompt = `Summarize the provided document content using the citation references exactly as written.
-
+    const prompt = `Summarize the provided document content.
 ${lengthInstruction}
 
 Context:
@@ -142,7 +146,8 @@ ${context}
 
 Summary:`;
 
-    const response = await this.llmClient.generate(prompt, { maxTokens: 1000 });
+    const activeLlmClient = input.llmClient ?? this.defaultLlmClient;
+    const response = await activeLlmClient.generate(prompt, { maxTokens: 1000 });
 
     return {
       query: 'Document Summary',
@@ -182,10 +187,13 @@ Summary:`;
     };
   }
 
-  private async tryRetrieve(query: string, topK: number, warnings: string[]): Promise<RetrievedChunk[]> {
+  private async tryRetrieve(query: string, sessionId: string, topK: number, warnings: string[], sourceFiles?: string[]): Promise<RetrievedChunk[]> {
+    if (sourceFiles && sourceFiles.length === 0) {
+      return [];
+    }
     try {
       const queryVector = await this.embedder.embedQuery(query);
-      return await this.vectorStore.search(queryVector, topK);
+      return await this.vectorStore.search(queryVector, topK, { sessionId, sourceFiles });
     } catch (error) {
       logger.warn('retrieval_path_failed_falling_back_to_chat', {
         error: error instanceof Error ? error.message : 'unknown_error',
@@ -193,6 +201,13 @@ Summary:`;
       warnings.push('Retrieval is unavailable right now. Responding in chat mode.');
       return [];
     }
+  }
+
+  public getEmbedderStatus(): 'primary' | 'fallback' {
+    if ('getStatus' in this.embedder) {
+      return (this.embedder as any).getStatus();
+    }
+    return 'primary';
   }
 
   private buildOfflineFallbackAnswer(query: string, searchResults: RetrievedChunk[]): string {

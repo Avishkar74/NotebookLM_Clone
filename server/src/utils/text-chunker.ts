@@ -52,7 +52,11 @@ export class TextChunker implements Chunker {
         chunkIndex += 1;
       }
 
-      start = Math.max(start + 1, end - this.chunkOverlap);
+      if (end >= text.length) {
+        start = text.length;
+      } else {
+        start = Math.max(start + 1, end - this.chunkOverlap);
+      }
     }
 
     return chunks;

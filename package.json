@@ -2,6 +2,7 @@
   "name": "notebooklm-clone",
   "private": true,
   "version": "1.0.0",
+  "type": "module",
   "workspaces": [
     "server",
     "client"
@@ -13,6 +14,10 @@
     "build": "npm run build --workspace server && npm run build --workspace client",
     "test": "npm run test --workspaces",
     "test:e2e": "npm run test:e2e --workspace server"
+  },
+  "dependencies": {
+    "openai": "^4.44.0",
+    "dotenv": "^16.4.5"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

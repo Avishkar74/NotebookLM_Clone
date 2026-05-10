@@ -11,3 +11,4 @@ server/node_modules/
 client/node_modules/
 *.tsbuildinfo
 server/tests/*.js
+embed-fallback-smoke.txt 

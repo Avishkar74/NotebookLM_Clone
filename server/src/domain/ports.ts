@@ -24,7 +24,7 @@ export interface Chunker {
 }
 
 export interface Embedder {
-  embedDocuments(chunks: DocumentChunk[]): Promise<EmbeddedChunk[]>;
+  embedDocuments(chunks: DocumentChunk[], sessionId?: string): Promise<EmbeddedChunk[]>;
   embedQuery(text: string): Promise<number[]>;
   getDimension(): Promise<number>;
 }
@@ -32,7 +32,7 @@ export interface Embedder {
 export interface VectorStore {
   ensureCollection(): Promise<void>;
   upsert(chunks: EmbeddedChunk[]): Promise<string[]>;
-  search(queryVector: number[], limit: number): Promise<RetrievedChunk[]>;
+  search(queryVector: number[], limit: number, filter?: { sessionId?: string; sourceFiles?: string[] }): Promise<RetrievedChunk[]>;
   getById(id: string): Promise<Record<string, unknown> | null>;
   clear(): Promise<void>;
 }

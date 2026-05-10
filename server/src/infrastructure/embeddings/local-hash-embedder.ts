@@ -4,8 +4,8 @@ import type { Embedder } from '../../domain/ports.js';
 export class LocalHashEmbedder implements Embedder {
   constructor(private readonly dimensions = 384) {}
 
-  public async embedDocuments(chunks: DocumentChunk[]): Promise<EmbeddedChunk[]> {
-    return chunks.map((chunk) => new EmbeddedChunk(chunk, this.createVector(chunk.content), 'local-hash-embedder'));
+  public async embedDocuments(chunks: DocumentChunk[], sessionId?: string): Promise<EmbeddedChunk[]> {
+    return chunks.map((chunk) => new EmbeddedChunk(chunk, this.createVector(chunk.content), 'local-hash-embedder', sessionId));
   }
 
   public async embedQuery(text: string): Promise<number[]> {

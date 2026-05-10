@@ -47,6 +47,42 @@ export class LocalDocumentLoader implements DocumentLoader {
       return chunks;
     }
 
+    if (sourceType === 'csv') {
+      let content = '';
+      try {
+        if (extension === '.csv') {
+          // Try UTF-8 read first
+          content = await fs.readFile(absolutePath, 'utf8');
+        } else {
+          // Force xlsx for .xlsx
+          throw new Error('Use xlsx');
+        }
+      } catch (e) {
+        const buffer = await fs.readFile(absolutePath);
+        const XLSX = await import('xlsx');
+        const workbook = XLSX.read(buffer, { type: 'buffer' });
+        content = '';
+        for (const sheetName of workbook.SheetNames) {
+          const sheet = workbook.Sheets[sheetName];
+          content += XLSX.utils.sheet_to_csv(sheet) + '\n\n';
+        }
+      }
+      
+      if (!content.trim()) {
+        throw new Error('CSV/Excel file is empty or could not be read.');
+      }
+
+      return this.chunker.chunk({
+        text: content,
+        sourceFile: path.basename(absolutePath),
+        sourceType: 'csv',
+        metadata: {
+          fileSize: stats.size,
+          parsedAt: new Date().toISOString(),
+        },
+      });
+    }
+
     const content = await fs.readFile(absolutePath, 'utf8');
     return this.chunker.chunk({
       text: content,
@@ -69,6 +105,12 @@ export class LocalDocumentLoader implements DocumentLoader {
     }
     if (extension === '.md') {
       return 'md';
+    }
+    if (extension === '.xml') {
+      return 'xml';
+    }
+    if (extension === '.csv' || extension === '.xlsx') {
+      return 'csv';
     }
     return null;
   }
