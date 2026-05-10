@@ -67,18 +67,12 @@ export class MilvusVectorStore implements VectorStore {
 
     await this.ensureCollection();
 
-    const data = chunks.map((chunk) => {
-      const record = chunk.toVectorRecord();
-      // FIXED: extract source_id from chunk metadata (stamped by IngestionService)
-      const sourceId = (chunk.chunk.metadata?.sourceId as string | undefined)
-        ?? chunk.chunk.sourceFile; // fallback to source_file for backward compat
-      return { ...record, source_id: sourceId };
-    });
+    const data = chunks.map((chunk) => chunk.toVectorRecord());
 
     await this.client.insert({ collection_name: this.collectionName, data: data as any[] });
     await this.client.flush({ collection_names: [this.collectionName] });
     await this.client.loadCollection({ collection_name: this.collectionName });
-    return data.map((item) => String(item.id));
+    return (data as any[]).map((item) => String(item.id));
   }
 
   // FIXED: parameter type now matches the VectorStore port interface

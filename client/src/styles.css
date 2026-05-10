@@ -800,3 +800,75 @@ button, input, textarea { font: inherit; }
   display: flex;
   margin-bottom: 8px;
 }
+
+/* Modal Loading Overlay */
+.modal-loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(var(--surface-rgb), 0.95);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  animation: fadeIn 0.3s ease;
+}
+
+.loading-pulse-container {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.pulse-circle {
+  position: absolute;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: var(--primary);
+  opacity: 0.3;
+  animation: pulseLoop 2s infinite ease-out;
+}
+
+.pulse-icon {
+  position: relative;
+  z-index: 2;
+  color: var(--primary);
+  animation: bounceScale 2s infinite ease-in-out;
+}
+
+.loading-text {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.loading-subtext {
+  font-size: 0.85rem;
+  color: var(--text-tertiary);
+}
+
+@keyframes pulseLoop {
+  0% { transform: scale(0.8); opacity: 0.5; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+@keyframes bounceScale {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

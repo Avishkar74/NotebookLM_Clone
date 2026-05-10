@@ -241,6 +241,20 @@ const AddSourceModal = memo(function AddSourceModal({
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-container" onClick={(e) => e.stopPropagation()}>
+        {uploading && (
+          <div className="modal-loading-overlay">
+            <div className="loading-pulse-container">
+              <div className="pulse-circle"></div>
+              <div className="pulse-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
+                </svg>
+              </div>
+            </div>
+            <div className="loading-text">Ingesting Source...</div>
+            <div className="loading-subtext">This may take a few seconds depending on document size</div>
+          </div>
+        )}
         <div className="modal-header">
           <h3 className="modal-title">
             {view === 'main' && 'Add sources'}
