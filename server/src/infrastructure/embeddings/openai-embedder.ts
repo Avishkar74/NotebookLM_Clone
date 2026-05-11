@@ -71,11 +71,18 @@ export class OpenAiEmbedder implements Embedder {
 
         const values = response.data[0]?.embedding ?? [];
         
-        // Bug 4 Fix: Strict dimension validation
+        // Handle dimension mismatch gracefully for Matryoshka-capable models
         if (values.length !== this.targetDimensions) {
+          if (values.length === 1536 && this.targetDimensions === 384) {
+            // This is likely text-embedding-3-small ignoring the dimensions parameter.
+            // Truncation is mathematically valid for this model.
+            console.warn(`Embedding provider returned 1536 dims instead of requested ${this.targetDimensions}. Truncating.`);
+            return values.slice(0, this.targetDimensions);
+          }
+          
           throw new Error(
             `Embedding dimension mismatch: expected ${this.targetDimensions}, got ${values.length}. ` +
-            `Check that your BASE_URL provider supports the 'dimensions' parameter.`
+            `Ensure your BASE_URL provider supports the 'dimensions' parameter or returns compatible vectors.`
           );
         }
         

@@ -12,15 +12,7 @@ export class MilvusVectorStore implements VectorStore {
     private readonly collectionName = 'notebook_lm',
     private readonly embeddingDim = 384,
   ) {
-    const isCloud = uri.includes('zillizcloud.com') || uri.includes('zilliz.com');
-    let cleanUri = uri.replace(/^https?:\/\//, '');
-    
-    // Zilliz Cloud usually expects the hostname and handles the port (443) automatically 
-    // or through the SDK's internal logic when no port is specified.
-    if (!isCloud && !cleanUri.includes(':')) {
-      cleanUri += ':19530';
-    }
-    this.client = new MilvusClient({ address: cleanUri, token });
+    this.client = new MilvusClient({ address: uri, token });
   }
 
   public async ensureCollection(): Promise<void> {
@@ -78,8 +70,6 @@ export class MilvusVectorStore implements VectorStore {
     const data = chunks.map((chunk) => chunk.toVectorRecord());
 
     await this.client.insert({ collection_name: this.collectionName, data: data as any[] });
-    await this.client.flush({ collection_names: [this.collectionName] });
-    await this.client.loadCollection({ collection_name: this.collectionName });
     return (data as any[]).map((item) => String(item.id));
   }
 
