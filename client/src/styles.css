@@ -1,4 +1,4 @@
-﻿@import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Google+Sans+Text:wght@400;500&family=Roboto+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Google+Sans+Text:wght@400;500&family=Roboto+Mono:wght@400;500&display=swap');
 
 :root {
   color-scheme: dark;
@@ -59,7 +59,7 @@ button, input, textarea { font: inherit; }
 /* ─── Sources Panel (Left) ───────────────────────────────────── */
 .sources-panel {
   display: flex; flex-direction: column;
-  height: 100vh; overflow-y: auto;
+  height: 100vh;
   background: var(--surface);
   border-right: 1px solid var(--border-light);
   padding: 12px;
@@ -961,3 +961,55 @@ button, input, textarea { font: inherit; }
 .toast--warning .toast-icon {
   color: #f59e0b;
 }
+
+/* ─── BYOK (Bring Your Own Key) Section ──────────────────────── */
+.byok-section {
+  margin-top: auto;
+  padding: 16px 4px 8px;
+  border-top: 1px solid var(--border-light);
+  background: transparent;
+}
+
+.byok-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.byok-header svg {
+  color: var(--primary);
+  opacity: 0.8;
+}
+
+.byok-input {
+  width: 100%;
+  background: var(--surface-variant);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.byok-input:focus {
+  border-color: var(--primary-dim);
+  box-shadow: 0 0 0 2px rgba(168, 199, 250, 0.1);
+  background: var(--surface-hover);
+}
+
+.byok-disclaimer {
+  margin-top: 10px;
+  font-size: 0.65rem;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
