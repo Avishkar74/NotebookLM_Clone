@@ -17,7 +17,7 @@ function classifyIntent(query: string): QueryIntent {
   if (/\b(what files|which files|what sources|list (my |the |)sources|what (do i|have i) (uploaded|added)|show (me |)(my |)(files|sources|documents))\b/.test(q)) {
     return QueryIntent.SOURCE_LISTING;
   }
-  if (/\b(what (are|is) (in |)(my |the |)(sources|files|documents)|what (do i|have i) (have|got))\b/.test(q) && !/\b(content|say|about|discuss|explain|describe|detail)\b/.test(q)) {
+  if (/\b(what (are|is) (in |)(my |the |)(sources|files|documents)|what (files|sources) (do i|have i) (have|got))\b/.test(q) && !/\b(content|say|about|discuss|explain|describe|detail|tell|do|assignment|task)\b/.test(q)) {
     return QueryIntent.METADATA_QUERY;
   }
 
