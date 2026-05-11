@@ -1,1 +1,0 @@
-NotebookLM clone smoke test. This document explains that notebooks can index sources, chunk them, and answer questions with citations.

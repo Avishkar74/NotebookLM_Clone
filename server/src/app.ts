@@ -44,6 +44,11 @@ export const createApp = () => {
     res.send('NotebookLM Clone API is running. Point your frontend to /api for requests.');
   });
 
+  // Health check endpoint for uptime monitoring (e.g., Render keep-alive)
+  app.get('/health-check', (_req, res) => {
+    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
   app.use('/api', jsonRoutes(container));
 
   app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
