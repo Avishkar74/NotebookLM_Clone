@@ -28,18 +28,28 @@ export type AppContainer = {
 };
 
 export const createContainer = (): AppContainer => {
-  if (!env.chatanywhereApiKey) {
-    throw new Error('CHATANYWHERE_API_KEY is required');
+  if (!env.openaiApiKey && !env.chatanywhereApiKey) {
+    throw new Error('Either OPENAI_API_KEY or CHATANYWHERE_API_KEY is required');
   }
 
   const documentLoader = new LocalDocumentLoader(1000, 200);
   const webLoader = new FirecrawlWebLoader(env.firecrawlApiKey, 1000, 100);
   const audioTranscriber = new AssemblyAiAudioTranscriber(env.assemblyAiApiKey, 1000, 100);
-  const embedder = new ResilientEmbedder(
-    new OpenAiEmbedder(env.chatanywhereApiKey, env.baseUrl),
-    new LocalHashEmbedder(384),
+  const nativeOpenAiEmbedder = new OpenAiEmbedder(env.openaiApiKey, undefined, 'text-embedding-3-small', 384);
+  const proxyOpenAiEmbedder = new OpenAiEmbedder(env.chatanywhereApiKey, env.baseUrl, 'text-embedding-3-small', 384);
+  const localHashEmbedder = new LocalHashEmbedder(384);
+
+  const embedder = new ResilientEmbedder([
+    nativeOpenAiEmbedder,
+    proxyOpenAiEmbedder,
+    localHashEmbedder,
+  ]);
+
+  const llmClient = new OpenAiLlmClient(
+    env.openaiApiKey || env.chatanywhereApiKey,
+    env.openaiApiKey ? undefined : env.baseUrl,
+    env.model
   );
-  const llmClient = new OpenAiLlmClient(env.chatanywhereApiKey, env.baseUrl, env.model);
   const memoryStore = new HybridMemoryStore(env.zepApiKey);
   const vectorStore = env.milvusUri && env.milvusToken
     ? new MilvusVectorStore(env.milvusUri, env.milvusToken, 'notebook_lm', 384)

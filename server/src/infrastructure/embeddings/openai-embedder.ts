@@ -8,13 +8,13 @@ export class OpenAiEmbedder implements Embedder {
 
   constructor(
     apiKey: string,
-    baseURL: string,
+    baseURL?: string,
     modelName = 'text-embedding-3-small',
     private readonly targetDimensions = 384,
   ) {
     this.client = new OpenAI({
       apiKey,
-      baseURL,
+      ...(baseURL ? { baseURL } : {}),
     });
     this.modelName = modelName;
   }
@@ -59,49 +59,64 @@ export class OpenAiEmbedder implements Embedder {
   }
 
   private async embedText(text: string, retries = 3): Promise<number[]> {
-    let lastError: any;
-    
+    let lastError: unknown;
+
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
         const response = await this.client.embeddings.create({
           model: this.modelName,
           input: text,
-          dimensions: this.targetDimensions,
+          // REMOVED: dimensions parameter — not supported by ChatAnywhere/most proxies
+          // We normalize the output below instead
         });
 
         const values = response.data[0]?.embedding ?? [];
-        
-        // Handle dimension mismatch gracefully for Matryoshka-capable models
-        if (values.length !== this.targetDimensions) {
-          if (values.length === 1536 && this.targetDimensions === 384) {
-            // This is likely text-embedding-3-small ignoring the dimensions parameter.
-            // Truncation is mathematically valid for this model.
-            console.warn(`Embedding provider returned 1536 dims instead of requested ${this.targetDimensions}. Truncating.`);
-            return values.slice(0, this.targetDimensions);
-          }
-          
-          throw new Error(
-            `Embedding dimension mismatch: expected ${this.targetDimensions}, got ${values.length}. ` +
-            `Ensure your BASE_URL provider supports the 'dimensions' parameter or returns compatible vectors.`
-          );
+
+        if (values.length === 0) {
+          throw new Error('Empty embedding returned from API');
         }
-        
-        return values;
-      } catch (error: any) {
+
+        // Normalize to target dimensions — handles any provider
+        if (values.length >= this.targetDimensions) {
+          // Truncation is valid for Matryoshka models (text-embedding-3-*)
+          // and a safe approximation for ada-002 / other providers
+          if (values.length > this.targetDimensions) {
+            console.warn(`Embedding provider returned ${values.length} dims instead of requested ${this.targetDimensions}. Truncating.`);
+          }
+          return values.slice(0, this.targetDimensions);
+        }
+
+        // Values shorter than target (unusual) — zero-pad to maintain dimension consistency
+        console.warn(`Embedding provider returned ${values.length} dims (fewer than ${this.targetDimensions}). Padding with zeros.`);
+        return [
+          ...values,
+          ...new Array(this.targetDimensions - values.length).fill(0),
+        ];
+      } catch (error: unknown) {
         lastError = error;
-        const isRateLimit = error?.status === 429 || error?.message?.includes('rate limit');
-        
+        const errMsg = error instanceof Error ? error.message : String(error);
+        const isRateLimit =
+          (error as { status?: number })?.status === 429 ||
+          errMsg.includes('rate limit') ||
+          errMsg.includes('429');
+
         if (isRateLimit && attempt < retries - 1) {
-          const delay = Math.pow(2, attempt) * 1000;
+          const delay = Math.pow(2, attempt) * 1500;
           await new Promise((r) => setTimeout(r, delay));
           continue;
         }
+
+        // Log non-rate-limit errors but still retry once more for transient issues (500s)
+        if (!isRateLimit && attempt === retries - 1) {
+          break;
+        }
         
-        if (!isRateLimit) break; // Don't retry non-rate-limit errors
+        // Wait a bit before retrying even non-rate-limit errors
+        await new Promise((r) => setTimeout(r, 500));
       }
     }
 
     const errorMessage = lastError instanceof Error ? lastError.message : 'unknown_error';
-    throw new Error(`OpenAI embedding failed after ${retries} attempts: ${errorMessage}`);
+    throw new Error(`Embedding failed after ${retries} attempts: ${errorMessage}`);
   }
 }

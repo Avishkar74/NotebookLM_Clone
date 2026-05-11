@@ -11,6 +11,7 @@ export const env = {
   geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-001',
   geminiLlmModel: process.env.GEMINI_LLM_MODEL ?? 'gemini-2.5-flash',
   chatanywhereApiKey: process.env.CHATANYWHERE_API_KEY ?? '',
+  openaiApiKey: process.env.OPENAI_API_KEY ?? '',
   baseUrl: (process.env.BASE_URL ?? '').includes('://') 
     ? (process.env.BASE_URL ?? '') 
     : (process.env.BASE_URL ? `https://${process.env.BASE_URL}` : ''),

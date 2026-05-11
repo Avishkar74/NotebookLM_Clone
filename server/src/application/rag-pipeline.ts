@@ -94,7 +94,10 @@ export class RagPipeline {
     // Bug 1 Fix: Re-hydrate the ResilientEmbedder's source map from client-provided state
     if (input.sourceStateInfo && 'registerSourceEmbedder' in this.embedder) {
       for (const s of input.sourceStateInfo) {
-        const type = s.embeddingModel === 'local-hash-embedder' ? 'fallback' : 'primary';
+        // Map saved state to our 3-stage chain:
+        // Index 0/1: OpenAI-compatible spaces (can use index 0 for querying both)
+        // Index 2: Local Hash space
+        const type = s.embeddingModel === 'local-hash-embedder' ? 2 : 0;
         (this.embedder as any).registerSourceEmbedder(s.sourceId, type);
       }
     }

@@ -5,135 +5,101 @@ import { logger } from '../../utils/logger.js';
 export class ResilientEmbedder implements Embedder {
   // Track per-source which embedder was used, keyed by sourceId
   // This survives across query requests within the same server instance
-  private readonly sourceEmbedderMap = new Map<string, 'primary' | 'fallback'>();
-  private lastDocumentEmbedder: 'primary' | 'fallback' | null = null;
+  private readonly sourceEmbedderMap = new Map<string, number>();
+  private lastDocumentEmbedderIndex: number | null = null;
 
   constructor(
-    private readonly primary: Embedder,
-    private readonly fallback: Embedder,
+    private readonly embedders: Embedder[],
   ) {}
 
   public async embedDocuments(chunks: DocumentChunk[], sessionId?: string): Promise<EmbeddedChunk[]> {
-    // Extract sourceId from first chunk's metadata for tracking
     const sourceId = (chunks[0]?.metadata?.sourceId as string | undefined) ?? 'unknown';
+    const errors: string[] = [];
 
-    try {
-      const result = await this.primary.embedDocuments(chunks, sessionId);
-      this.lastDocumentEmbedder = 'primary';
-      this.sourceEmbedderMap.set(sourceId, 'primary');
-      logger.info('embed_documents_primary_success', { sourceId, chunkCount: chunks.length });
-      return result;
-    } catch (error) {
-      logger.warn('primary_embed_documents_failed_using_fallback', {
-        error: error instanceof Error ? error.message : 'unknown_error',
-        chunkCount: chunks.length,
-        sourceId,
-      });
-      this.lastDocumentEmbedder = 'fallback';
-      this.sourceEmbedderMap.set(sourceId, 'fallback');
-
+    for (let i = 0; i < this.embedders.length; i++) {
       try {
-        return await this.fallback.embedDocuments(chunks, sessionId);
-      } catch (fallbackError) {
-        // Both embedders failed — this is a hard error, not a silent degradation
-        logger.error('both_embedders_failed', {
-          primaryError: error instanceof Error ? error.message : 'unknown_error',
-          fallbackError: fallbackError instanceof Error ? fallbackError.message : 'unknown_error',
-          sourceId,
-        });
-        throw new Error(`Embedding completely failed. Primary: ${error instanceof Error ? error.message : 'unknown'}. Fallback: ${fallbackError instanceof Error ? fallbackError.message : 'unknown'}`);
+        const result = await this.embedders[i].embedDocuments(chunks, sessionId);
+        this.lastDocumentEmbedderIndex = i;
+        this.sourceEmbedderMap.set(sourceId, i);
+        logger.info('embed_documents_success', { sourceId, embedderIndex: i, chunkCount: chunks.length });
+        return result;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        errors.push(`[${i}] ${msg}`);
+        logger.warn('embedder_failed_trying_next', { sourceId, index: i, error: msg });
       }
     }
+
+    logger.error('all_embedders_failed', { sourceId, errors });
+    throw new Error(`All embedders failed. Chain: ${errors.join(' | ')}`);
   }
 
-  /**
-   * Embed a query, using the correct embedder based on which sources are being queried.
-   * 
-   * CRITICAL FIX: Documents and queries MUST use the same embedding space.
-   * If documents were embedded with the fallback (hash) embedder, queries must also use
-   * the fallback — otherwise cosine similarity will be near 0 and retrieval silently fails.
-   */
   public async embedQuery(text: string, sourceIds?: string[]): Promise<number[]> {
-    // Determine which embedder to use based on source context
-    const requiredEmbedder = this.resolveQueryEmbedder(sourceIds);
+    const requiredIndex = this.resolveQueryEmbedderIndex(sourceIds);
 
-    if (requiredEmbedder === 'fallback') {
-      logger.warn('query_using_fallback_embedder_for_consistency', {
-        reason: 'sources_were_indexed_with_fallback',
-        sourceIds,
-      });
+    for (let i = requiredIndex; i < this.embedders.length; i++) {
       try {
-        return await this.fallback.embedQuery(text);
+        return await this.embedders[i].embedQuery(text);
       } catch (error) {
-        logger.error('fallback_embed_query_failed', { error: error instanceof Error ? error.message : 'unknown_error' });
-        throw error;
+        logger.warn('query_embedder_failed_trying_next', { index: i, error: error instanceof Error ? error.message : 'unknown' });
       }
     }
 
-    // Use primary embedder
-    try {
-      return await this.primary.embedQuery(text);
-    } catch (error) {
-      logger.warn('primary_embed_query_failed_using_fallback', {
-        error: error instanceof Error ? error.message : 'unknown_error',
-      });
-      return this.fallback.embedQuery(text, sourceIds);
+    if (requiredIndex > 0) {
+      for (let i = 0; i < requiredIndex; i++) {
+        try {
+          return await this.embedders[i].embedQuery(text);
+        } catch (error) {
+          logger.warn('query_embedder_fallback_failed', { index: i });
+        }
+      }
     }
+
+    throw new Error('All query embedders failed');
   }
 
   public async getDimension(): Promise<number> {
-    try {
-      return await this.primary.getDimension();
-    } catch {
-      return this.fallback.getDimension();
+    for (const e of this.embedders) {
+      try {
+        return await e.getDimension();
+      } catch { continue; }
     }
+    return 384;
   }
 
-  public getStatus(): 'primary' | 'fallback' {
-    return this.lastDocumentEmbedder || 'primary';
+  public getStatus(): string {
+    if (this.lastDocumentEmbedderIndex === null) return 'idle';
+    return `embedder_${this.lastDocumentEmbedderIndex}`;
   }
 
-  /**
-   * Determine which embedder to use for a query.
-   * If ALL selected sources used fallback → use fallback.
-   * If ANY selected source used primary → use primary (mixed case, best effort).
-   * If no source info available → use primary (optimistic).
-   */
-  private resolveQueryEmbedder(sourceIds?: string[]): 'primary' | 'fallback' {
+  private resolveQueryEmbedderIndex(sourceIds?: string[]): number {
     if (!sourceIds || sourceIds.length === 0) {
-      // No source context: use whatever was used last, or primary
-      return this.lastDocumentEmbedder ?? 'primary';
+      return this.lastDocumentEmbedderIndex ?? 0;
     }
 
-    const embedderUsages = sourceIds
+    const indices = sourceIds
       .map((id) => this.sourceEmbedderMap.get(id))
-      .filter((e): e is 'primary' | 'fallback' => e !== undefined);
+      .filter((i): i is number => i !== undefined);
 
-    if (embedderUsages.length === 0) {
-      // No tracking info for these sources (e.g. server restarted after indexing)
-      // Optimistically try primary; if scores are all 0, user will see no results
-      return this.lastDocumentEmbedder ?? 'primary';
+    if (indices.length === 0) {
+      return this.lastDocumentEmbedderIndex ?? 0;
     }
 
-    // If ALL sources used fallback, use fallback
-    const allFallback = embedderUsages.every((e) => e === 'fallback');
-    return allFallback ? 'fallback' : 'primary';
+    return Math.max(...indices);
   }
 
-  /**
-   * Register which embedder was used for a source (called externally when source info is loaded from storage)
-   */
-  public registerSourceEmbedder(sourceId: string, embedder: 'primary' | 'fallback'): void {
-    this.sourceEmbedderMap.set(sourceId, embedder);
+  public registerSourceEmbedder(sourceId: string, type: 'primary' | 'fallback' | number): void {
+    if (typeof type === 'number') {
+      this.sourceEmbedderMap.set(sourceId, type);
+    } else {
+      this.sourceEmbedderMap.set(sourceId, type === 'primary' ? 0 : 1);
+    }
   }
 
-  /**
-   * Check if all given sources used the same embedder (for warning purposes)
-   */
   public hasEmbedderMismatch(sourceIds: string[]): boolean {
-    const embedders = new Set(
-      sourceIds.map((id) => this.sourceEmbedderMap.get(id)).filter(Boolean)
+    const indices = new Set(
+      sourceIds.map((id) => this.sourceEmbedderMap.get(id)).filter((i) => i !== undefined)
     );
-    return embedders.size > 1;
+    return indices.size > 1;
   }
 }

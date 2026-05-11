@@ -209,7 +209,7 @@ export class IngestionService {
       if (isFallback) {
         warnings.push(
           'Semantic embeddings failed — using keyword fallback. Retrieval quality will be significantly reduced. ' +
-          'Check your CHATANYWHERE_API_KEY and BASE_URL configuration.',
+          'Check your API keys (OPENAI_API_KEY / CHATANYWHERE_API_KEY) and network configuration.',
         );
         logger.warn('ingestion_used_fallback_embedder', {
           sourceId: metadata.sourceId,

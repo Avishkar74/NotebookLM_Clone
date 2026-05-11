@@ -70,6 +70,8 @@ export class MilvusVectorStore implements VectorStore {
     const data = chunks.map((chunk) => chunk.toVectorRecord());
 
     await this.client.insert({ collection_name: this.collectionName, data: data as any[] });
+    await this.client.flush({ collection_names: [this.collectionName] });
+    await this.client.loadCollection({ collection_name: this.collectionName });
     return (data as any[]).map((item) => String(item.id));
   }
 
