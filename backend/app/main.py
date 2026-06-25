@@ -1,14 +1,34 @@
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from app.config.settings import settings
 from app.config.logging import setup_logging
-from app.api import health
+from app.api import health, documents
+from app.services.document_service import DocumentService
+from app.repositories.vector_repository import VectorRepository
+import asyncio
 
 # Setup logging configuration
 setup_logging()
 logger = logging.getLogger("app")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Provision vector store collection once
+    try:
+        repo = VectorRepository()
+        await asyncio.to_thread(repo.create_collection_if_not_exists, 3072)
+    except Exception as e:
+        logger.error(f"Failed to initialize vector database collection: {str(e)}")
+
+    # Start sequential ingestion worker
+    service = DocumentService()
+    service.start_worker()
+    yield
+    # Shutdown: Stop sequential ingestion worker
+    await service.stop_worker()
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -17,7 +37,8 @@ def create_app() -> FastAPI:
         version="1.0.0",
         docs_url="/api/docs",
         redoc_url="/api/redoc",
-        openapi_url="/api/openapi.json"
+        openapi_url="/api/openapi.json",
+        lifespan=lifespan
     )
 
     # Configure CORS
@@ -53,7 +74,9 @@ def create_app() -> FastAPI:
 
     # Register routers
     app.include_router(health.router, prefix="/api", tags=["Health"])
+    app.include_router(documents.router, prefix="/api", tags=["Documents"])
 
     return app
 
 app = create_app()
+

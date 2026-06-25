@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, UTC
 from fastapi import APIRouter
 from typing import Dict, Any
 from app.config.settings import settings
@@ -75,7 +75,7 @@ async def health_check():
     
     return {
         "status": "healthy" if is_healthy else "unhealthy",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z",
         "version": "1.0.0",
         "services": {
             "openai_api": openai_res["status"],
