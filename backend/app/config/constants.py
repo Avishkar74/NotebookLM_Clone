@@ -1,0 +1,30 @@
+from enum import Enum
+
+class Verdict(str, Enum):
+    CORRECT = "CORRECT"
+    INCORRECT = "INCORRECT"
+    AMBIGUOUS = "AMBIGUOUS"
+
+class IngestionStatus(str, Enum):
+    QUEUED = "QUEUED"
+    PARSING = "PARSING"
+    CHUNKING = "CHUNKING"
+    EMBEDDING = "EMBEDDING"
+    STORING = "STORING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+class NodeStatus(str, Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+
+class NodeType(str, Enum):
+    RETRIEVER = "RETRIEVER"
+    EVALUATOR = "EVALUATOR"
+    KNOWLEDGE_REFINEMENT = "KNOWLEDGE_REFINEMENT"
+    KNOWLEDGE_SEARCH = "KNOWLEDGE_SEARCH"
+    QUERY_REWRITE = "QUERY_REWRITE"
+    GENERATOR = "GENERATOR"

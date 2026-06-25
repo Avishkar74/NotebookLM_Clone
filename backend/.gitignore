@@ -1,0 +1,44 @@
+# Environment variables
+.env
+
+
+# Virtual environments
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest
+.pytest_cache/
+
+# Type checking
+.mypy_cache/
+
+# Linting
+.ruff_cache/
+
+# Coverage
+.coverage
+htmlcov/
+
+# Build / Distribution
+build/
+dist/
+*.egg-info/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Uploaded files (if your app stores uploads locally)
+uploads/
