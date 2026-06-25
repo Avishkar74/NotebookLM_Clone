@@ -25,14 +25,24 @@ class CostEstimate(BaseModel):
 
 class TraceResponseData(BaseModel):
     trace_id: str
+    session_id: Optional[str] = None
     query_id: str
-    query_text: str
+    question: str
+    status: str  # CREATED, RUNNING, COMPLETED, FAILED, CANCELLED
     started_at: datetime
     completed_at: datetime
-    total_duration_ms: float
+    duration_ms: float
+    decision_path: str  # CORRECT, AMBIGUOUS, INCORRECT
+    active_branch: List[str]
     nodes: List[NodeEvent]
-    execution_path: List[str]
-    cost_estimate: CostEstimate
+    final_answer: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    # Backward compatibility fields
+    query_text: Optional[str] = None
+    total_duration_ms: Optional[float] = None
+    execution_path: Optional[List[str]] = None
+    cost_estimate: Optional[CostEstimate] = None
 
 class TraceResponseEnvelope(BaseModel):
     status: str = "success"

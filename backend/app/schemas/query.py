@@ -12,6 +12,7 @@ class QueryRequest(BaseModel):
     document_ids: Optional[List[str]] = Field(default_factory=list)
     top_k: Optional[int] = Field(5, ge=1, le=20)
     options: Optional[QueryOptions] = Field(default_factory=QueryOptions)
+    session_id: Optional[str] = None
 
 class QueryConfidence(BaseModel):
     overall: float

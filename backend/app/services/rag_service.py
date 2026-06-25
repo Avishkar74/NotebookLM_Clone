@@ -52,14 +52,15 @@ class RAGService:
         document_ids = request.document_ids
         top_k = request.top_k or 5
         use_web_search = request.options.use_web_search if request.options else True
+        session_id = request.session_id if hasattr(request, "session_id") else None
+        if not session_id:
+            session_id = "session_001"
         
         # Start Trace tracking
         query_id = str(uuid.uuid4())
         trace_id = f"trace_{uuid.uuid4().hex[:8]}"
         pipeline_start_time = time.time()
         pipeline_started_at = datetime.now(UTC)
-        
-        nodes: List[NodeEvent] = []
         
         # Total tokens trackers for cost estimation
         total_prompt_tokens = 0
@@ -95,6 +96,15 @@ class RAGService:
                 "document_ids": document_ids
             },
             output={
+                "retrieved_chunks": [
+                    {
+                        "chunk_id": chunk.chunk_id,
+                        "score": chunk.similarity_score,
+                        "page": chunk.page_number,
+                        "document": chunk.filename
+                    } for chunk in retrieved_chunks
+                ],
+                # Backward compatibility
                 "chunks": [
                     {
                         "chunk_id": chunk.chunk_id,
@@ -107,11 +117,12 @@ class RAGService:
                 "total_chunks_returned": len(retrieved_chunks)
             },
             metadata={
+                "top_k": top_k,
+                "similarity_metric": "cosine",
                 "embedding_model": settings.EMBEDDING_MODEL,
-                "retrieval_method": "cosine_similarity"
+                "vector_database": "Qdrant Cloud" if settings.QDRANT_URL else "Qdrant In-Memory"
             }
         )
-        nodes.append(retriever_node)
         
         # --- 2. EVALUATOR NODE ---
         evaluator_start_time = time.time()
@@ -151,14 +162,16 @@ class RAGService:
                 "reasoning": reasoning
             },
             metadata={
-                "evaluator_model": settings.LLM_MODEL,
-                "tokens_used": eval_prompt_tokens + eval_completion_tokens
+                "model": settings.LLM_MODEL,
+                "temperature": 0.0,
+                "tokens": eval_prompt_tokens + eval_completion_tokens
             }
         )
-        nodes.append(evaluator_node)
         
         # --- 3. ROUTER NODE ---
-        # Resolve branch routing properties
+        router_start_time = time.time()
+        router_started_at = datetime.now(UTC)
+        
         routing = self.router_node.get_execution_path(verdict)
         decision_path = routing["decision_path"]
         execution_path = routing["execution_path"]
@@ -177,8 +190,31 @@ class RAGService:
                 execution_path = ["RETRIEVER", "EVALUATOR", "KNOWLEDGE_REFINEMENT", "GENERATOR"]
                 run_refiner = True
         
+        router_completed_at = datetime.now(UTC)
+        router_duration_ms = (time.time() - router_start_time) * 1000
+        
+        router_node = NodeEvent(
+            node_id="router",
+            node_name="Router",
+            display_name="Routing Pipeline",
+            type="routing",
+            status="SUCCESS",
+            started_at=router_started_at,
+            completed_at=router_completed_at,
+            duration_ms=router_duration_ms,
+            input={
+                "verdict": verdict,
+                "confidence": confidence_val
+            },
+            output={
+                "selected_branch": decision_path
+            },
+            metadata={}
+        )
+        
         # --- 4. REWRITE NODE (INCORRECT branch) ---
         rewritten_query = query_text
+        rewrite_node = None
         if run_rewrite:
             rewrite_start_time = time.time()
             rewrite_started_at = datetime.now(UTC)
@@ -203,18 +239,21 @@ class RAGService:
                 completed_at=rewrite_completed_at,
                 duration_ms=rewrite_duration_ms,
                 input={"original_query": query_text},
-                output={"rewritten_query": rewritten_query},
+                output={
+                    "original_query": query_text,
+                    "rewritten_query": rewritten_query
+                },
                 metadata={
                     "model": settings.LLM_MODEL,
                     "temperature": 0.2
                 }
             )
-            nodes.append(rewrite_node)
             
         # --- 5. WEB SEARCH NODE (AMBIGUOUS / INCORRECT branch) ---
         external_context = ""
         results_found = 0
         selected_results = 0
+        search_node = None
         if run_search:
             search_start_time = time.time()
             search_started_at = datetime.now(UTC)
@@ -238,16 +277,17 @@ class RAGService:
                 duration_ms=search_duration_ms,
                 input={"query": rewritten_query},
                 output={
+                    "rewritten_query": rewritten_query,
                     "results_found": results_found,
                     "selected_results": selected_results,
-                    "external_context": external_context[:200] + "..." if external_context else ""
+                    "external_context": external_context
                 },
                 metadata={"search_engine": "Tavily API"}
             )
-            nodes.append(search_node)
             
         # --- 6. REFINEMENT NODE (CORRECT / AMBIGUOUS branch) ---
         refined_context = ""
+        refine_node = None
         if run_refiner:
             refine_start_time = time.time()
             refine_started_at = datetime.now(UTC)
@@ -272,18 +312,20 @@ class RAGService:
                 completed_at=refine_completed_at,
                 duration_ms=refine_duration_ms,
                 input={
-                    "input_chunks": len(retrieved_chunks),
-                    "query": query_text
+                    "query": query_text,
+                    "input_chunks": len(retrieved_chunks)
                 },
                 output={
-                    "refined_context": refined_context[:200] + "..." if refined_context else ""
+                    "input_chunks": len(retrieved_chunks),
+                    "output_chunks": len(retrieved_chunks) if refined_context else 0,
+                    "removed_chunks": 0,
+                    "refined_context": refined_context
                 },
                 metadata={
                     "model": settings.LLM_MODEL,
                     "temperature": 0.0
                 }
             )
-            nodes.append(refine_node)
             
         # --- 7. GENERATOR NODE ---
         generator_start_time = time.time()
@@ -342,7 +384,7 @@ class RAGService:
             answer = f"Mocked response for '{query_text}'. Verdict decision branch executed: {decision_path}."
             gen_completion_tokens = self._count_tokens(answer)
             total_completion_tokens += gen_completion_tokens
-
+ 
         generator_completed_at = datetime.now(UTC)
         generator_duration_ms = (time.time() - generator_start_time) * 1000
         
@@ -360,15 +402,18 @@ class RAGService:
                 "context_length_tokens": gen_prompt_tokens
             },
             output={
-                "answer": answer,
-                "answer_length_tokens": gen_completion_tokens
+                "model": settings.LLM_MODEL,
+                "tokens_prompt": gen_prompt_tokens,
+                "tokens_completion": gen_completion_tokens,
+                "answer": answer
             },
             metadata={
-                "generator_model": settings.LLM_MODEL,
-                "temperature": 0.3
+                "model": settings.LLM_MODEL,
+                "temperature": 0.3,
+                "tokens_prompt": gen_prompt_tokens,
+                "tokens_completion": gen_completion_tokens
             }
         )
-        nodes.append(generator_node)
         
         # --- 8. POST-PROCESSING & COST ESTIMATING ---
         pipeline_completed_at = datetime.now(UTC)
@@ -381,20 +426,114 @@ class RAGService:
         cost_estimate = CostEstimate(
             currency="USD",
             embedding_api=round(cost_embedding, 6),
-            evaluator_api=0.0, # Not split out
+            evaluator_api=0.0,
             generator_api=round(cost_generator_input + cost_generator_output, 6),
             total=round(cost_embedding + cost_generator_input + cost_generator_output, 6)
         )
         
+        # Assemble dynamic active branch display names matching 07_EXECUTION_TRACE.md spec
+        active_branch = ["Retriever", "Evaluator", "Router"]
+        if run_rewrite:
+            active_branch.append("Query Rewrite")
+        if run_refiner:
+            active_branch.append("Knowledge Refinement")
+        if run_search:
+            active_branch.append("Knowledge Search")
+        active_branch.append("Generator")
+
+        # Compile standardized nodes list in logical pipeline flow order, marking non-executed nodes as SKIPPED
+        final_nodes = []
+        
+        # 1. Retriever
+        final_nodes.append(retriever_node)
+        # 2. Evaluator
+        final_nodes.append(evaluator_node)
+        # 3. Router
+        final_nodes.append(router_node)
+        
+        # 4. Query Rewrite
+        if run_rewrite and rewrite_node:
+            final_nodes.append(rewrite_node)
+        else:
+            final_nodes.append(NodeEvent(
+                node_id="query_rewrite",
+                node_name="Query Rewrite",
+                display_name="Rewriting Query",
+                type="query_rewrite",
+                status="SKIPPED",
+                started_at=pipeline_started_at,
+                completed_at=pipeline_started_at,
+                duration_ms=0.0,
+                input={},
+                output={},
+                metadata={}
+            ))
+            
+        # 5. Knowledge Refinement
+        if run_refiner and refine_node:
+            final_nodes.append(refine_node)
+        else:
+            final_nodes.append(NodeEvent(
+                node_id="knowledge_refinement",
+                node_name="Knowledge Refinement",
+                display_name="Refining Context",
+                type="refinement",
+                status="SKIPPED",
+                started_at=pipeline_started_at,
+                completed_at=pipeline_started_at,
+                duration_ms=0.0,
+                input={},
+                output={},
+                metadata={}
+            ))
+            
+        # 6. Knowledge Search
+        if run_search and search_node:
+            final_nodes.append(search_node)
+        else:
+            final_nodes.append(NodeEvent(
+                node_id="knowledge_search",
+                node_name="Knowledge Search",
+                display_name="Web Searching",
+                type="search",
+                status="SKIPPED",
+                started_at=pipeline_started_at,
+                completed_at=pipeline_started_at,
+                duration_ms=0.0,
+                input={},
+                output={},
+                metadata={}
+            ))
+            
+        # 7. Generator
+        final_nodes.append(generator_node)
+
         # Form trace response structure
         trace_data = TraceResponseData(
             trace_id=trace_id,
+            session_id=session_id,
             query_id=query_id,
-            query_text=query_text,
+            question=query_text,
+            status="COMPLETED",
             started_at=pipeline_started_at,
             completed_at=pipeline_completed_at,
+            duration_ms=pipeline_duration_ms,
+            decision_path=decision_path,
+            active_branch=active_branch,
+            nodes=final_nodes,
+            final_answer=answer,
+            metadata={
+                "cost_estimate": {
+                    "currency": cost_estimate.currency,
+                    "embedding_api": cost_estimate.embedding_api,
+                    "evaluator_api": cost_estimate.evaluator_api,
+                    "generator_api": cost_estimate.generator_api,
+                    "total": cost_estimate.total
+                }
+            },
+            # Backward compatibility fields
+            query_text=query_text,
             total_duration_ms=pipeline_duration_ms,
-            nodes=nodes,
             execution_path=execution_path,
             cost_estimate=cost_estimate
         )

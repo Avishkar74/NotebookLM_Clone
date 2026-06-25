@@ -74,8 +74,34 @@ def test_rag_pipeline_correct_path():
             trace_json = trace_resp.json()
             trace_data = trace_json["data"]
             assert trace_data["trace_id"] == trace_id
-            assert len(trace_data["nodes"]) == 4  # Retriever, Evaluator, Refinement, Generator
-            assert trace_data["execution_path"] == ["RETRIEVER", "EVALUATOR", "KNOWLEDGE_REFINEMENT", "GENERATOR"]
+            
+            # 7 standard nodes must exist
+            assert len(trace_data["nodes"]) == 7  
+            
+            # Verify execution states
+            assert trace_data["nodes"][0]["node_id"] == "retriever"
+            assert trace_data["nodes"][0]["status"] == "SUCCESS"
+            
+            assert trace_data["nodes"][1]["node_id"] == "evaluator"
+            assert trace_data["nodes"][1]["status"] == "SUCCESS"
+            
+            assert trace_data["nodes"][2]["node_id"] == "router"
+            assert trace_data["nodes"][2]["status"] == "SUCCESS"
+            
+            assert trace_data["nodes"][3]["node_id"] == "query_rewrite"
+            assert trace_data["nodes"][3]["status"] == "SKIPPED"
+            
+            assert trace_data["nodes"][4]["node_id"] == "knowledge_refinement"
+            assert trace_data["nodes"][4]["status"] == "SUCCESS"
+            
+            assert trace_data["nodes"][5]["node_id"] == "knowledge_search"
+            assert trace_data["nodes"][5]["status"] == "SKIPPED"
+            
+            assert trace_data["nodes"][6]["node_id"] == "generator"
+            assert trace_data["nodes"][6]["status"] == "SUCCESS"
+            
+            assert trace_data["decision_path"] == "CORRECT"
+            assert trace_data["active_branch"] == ["Retriever", "Evaluator", "Router", "Knowledge Refinement", "Generator"]
             assert trace_data["cost_estimate"]["total"] > 0
 
 def test_rag_pipeline_ambiguous_path():
@@ -131,8 +157,18 @@ def test_rag_pipeline_ambiguous_path():
             assert trace_resp.status_code == 200
             trace_json = trace_resp.json()
             trace_data = trace_json["data"]
-            assert len(trace_data["nodes"]) == 5  # Retriever, Evaluator, Refinement, Search, Generator
-            assert trace_data["execution_path"] == ["RETRIEVER", "EVALUATOR", "KNOWLEDGE_REFINEMENT", "KNOWLEDGE_SEARCH", "GENERATOR"]
+            
+            assert len(trace_data["nodes"]) == 7
+            assert trace_data["nodes"][0]["status"] == "SUCCESS"
+            assert trace_data["nodes"][1]["status"] == "SUCCESS"
+            assert trace_data["nodes"][2]["status"] == "SUCCESS"
+            assert trace_data["nodes"][3]["status"] == "SKIPPED"
+            assert trace_data["nodes"][4]["status"] == "SUCCESS"
+            assert trace_data["nodes"][5]["status"] == "SUCCESS"
+            assert trace_data["nodes"][6]["status"] == "SUCCESS"
+            
+            assert trace_data["decision_path"] == "AMBIGUOUS"
+            assert trace_data["active_branch"] == ["Retriever", "Evaluator", "Router", "Knowledge Refinement", "Knowledge Search", "Generator"]
             mock_eval.assert_called_once()
             mock_refine.assert_called_once()
             mock_search_node.assert_called_once()
@@ -190,8 +226,18 @@ def test_rag_pipeline_incorrect_path():
             assert trace_resp.status_code == 200
             trace_json = trace_resp.json()
             trace_data = trace_json["data"]
-            assert len(trace_data["nodes"]) == 5  # Retriever, Evaluator, Rewrite, Search, Generator
-            assert trace_data["execution_path"] == ["RETRIEVER", "EVALUATOR", "QUERY_REWRITE", "KNOWLEDGE_SEARCH", "GENERATOR"]
+            
+            assert len(trace_data["nodes"]) == 7
+            assert trace_data["nodes"][0]["status"] == "SUCCESS"
+            assert trace_data["nodes"][1]["status"] == "SUCCESS"
+            assert trace_data["nodes"][2]["status"] == "SUCCESS"
+            assert trace_data["nodes"][3]["status"] == "SUCCESS"
+            assert trace_data["nodes"][4]["status"] == "SKIPPED"
+            assert trace_data["nodes"][5]["status"] == "SUCCESS"
+            assert trace_data["nodes"][6]["status"] == "SUCCESS"
+            
+            assert trace_data["decision_path"] == "INCORRECT"
+            assert trace_data["active_branch"] == ["Retriever", "Evaluator", "Router", "Query Rewrite", "Knowledge Search", "Generator"]
             mock_eval.assert_called_once()
             mock_rewrite.assert_called_once()
             mock_search_node.assert_called_once()
