@@ -4,7 +4,7 @@ import { useExecution } from "../../hooks/useExecution";
 import type { InspectorTab } from "../../types/ui";
 
 export const NodeOutputInspector = () => {
-  const { trace, selectedNodeId, selectNode } = useExecution();
+  const { trace, selectedNodeId, selectNode, nodeStatuses } = useExecution();
   const [isExpanded, setIsExpanded] = useState(false);
   const [activeTab, setActiveTab] = useState<InspectorTab>("output");
 
@@ -225,6 +225,8 @@ export const NodeOutputInspector = () => {
     }
   };
 
+  const currentStatus = nodeStatuses[node.node_id] || "PENDING";
+
   return (
     <div 
       className={`border-t border-neutral-800 bg-neutral-950 flex flex-col z-20 shrink-0 transition-all duration-300 ${
@@ -239,21 +241,23 @@ export const NodeOutputInspector = () => {
           <span className="text-neutral-700">|</span>
           <span className="text-xs font-bold text-neutral-200">{node.display_name}</span>
           <span className={`text-[8.5px] font-extrabold px-2 py-0.5 rounded border uppercase tracking-wider font-mono ${
-            node.status === "SUCCESS"
+            currentStatus === "SUCCESS"
               ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
-              : node.status === "FAILED"
+              : currentStatus === "FAILED"
                 ? "bg-red-500/10 border-red-500/30 text-red-450"
-                : node.status === "SKIPPED"
+                : currentStatus === "SKIPPED"
                   ? "bg-neutral-800/10 border-neutral-850 text-neutral-500"
-                  : "bg-amber-500/10 border-amber-500/30 text-amber-450"
+                  : currentStatus === "RUNNING"
+                    ? "bg-amber-500/10 border-amber-500/30 text-amber-450 animate-pulse"
+                    : "bg-neutral-900 border-neutral-800 text-neutral-500"
           }`}>
-            {node.status}
+            {currentStatus}
           </span>
         </div>
         
         <div className="flex items-center space-x-3">
           {/* Latency timing if executed */}
-          {node.status !== "SKIPPED" && (
+          {(currentStatus === "SUCCESS" || currentStatus === "FAILED") && node.status !== "SKIPPED" && (
             <div className="flex items-center space-x-1 text-[10px] text-neutral-500 font-mono">
               <Clock className="h-3 w-3 text-neutral-600" />
               <span>{node.duration_ms.toFixed(0)} ms</span>
@@ -296,8 +300,26 @@ export const NodeOutputInspector = () => {
         </div>
 
         {/* Tab content panel */}
-        <div className="flex-1 overflow-y-auto p-5 bg-neutral-950/45 font-mono text-xs">
-          {activeTab === "output" && renderOutputTabContent()}
+        <div className="flex-grow overflow-y-auto p-5 bg-neutral-950/45 font-mono text-xs">
+          {currentStatus === "PENDING" ? (
+            <div className="flex flex-col items-center justify-center text-center py-10 text-neutral-500 font-sans">
+              <Clock className="h-6 w-6 text-neutral-700 mb-2" />
+              <p className="text-xs font-bold uppercase tracking-wide text-neutral-450">Awaiting Pipeline Execution</p>
+              <p className="text-[10px] text-neutral-600 mt-1 max-w-xs leading-relaxed">
+                This node is pending. Real-time parameters and metrics will display once it starts replaying.
+              </p>
+            </div>
+          ) : currentStatus === "RUNNING" ? (
+            <div className="flex flex-col items-center justify-center text-center py-10 text-amber-500 font-sans">
+              <div className="h-6 w-6 rounded-full border-2 border-t-amber-500 border-neutral-800 animate-spin mb-2"></div>
+              <p className="text-xs font-bold uppercase tracking-wide">Executing Node...</p>
+              <p className="text-[10px] text-neutral-500 mt-1 max-w-xs leading-relaxed">
+                The pipeline is running this stage. Real-time node outputs will be outputted in a moment.
+              </p>
+            </div>
+          ) : (
+            <>
+              {activeTab === "output" && renderOutputTabContent()}
 
           {activeTab === "metadata" && (
             <div className="space-y-1.5 font-sans max-h-full overflow-y-auto pr-1">
@@ -336,6 +358,8 @@ export const NodeOutputInspector = () => {
             <pre className="text-[11px] text-emerald-450 bg-neutral-950 p-4.5 rounded-xl border border-neutral-850 overflow-x-auto max-h-[300px] leading-relaxed">
               {JSON.stringify(node, null, 2)}
             </pre>
+          )}
+            </>
           )}
         </div>
       </div>

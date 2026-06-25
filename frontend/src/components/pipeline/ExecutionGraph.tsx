@@ -111,10 +111,8 @@ const CustomPipelineNode: React.FC<PipelineNodeProps> = ({
 const nodeTypes = {
   pipeline: CustomPipelineNode,
 };
-
-export const ExecutionGraph: React.FC = () => {
-  const { trace, selectedNodeId, selectNode } = useExecution();
-  
+export const ExecutionGraph = () => {
+  const { selectedNodeId, selectNode, nodeStatuses } = useExecution();
   // Statically compute standard nodes list
   const initialNodes: PipelineNode[] = useMemo(() => [
     {
@@ -184,41 +182,35 @@ export const ExecutionGraph: React.FC = () => {
   useEffect(() => {
     setNodes((nds) =>
       nds.map((n) => {
-        const matchingNode = trace ? trace.nodes.find((tn) => tn.node_id === n.id) : null;
-        const nextStatus = (matchingNode ? matchingNode.status : "PENDING") as CustomNodeData["status"];
+        // Read status from nodeStatuses map, fallback to PENDING
+        const currentStatus = (nodeStatuses[n.id] || "PENDING") as CustomNodeData["status"];
         
         return {
           ...n,
           selected: n.id === selectedNodeId,
           data: {
             ...n.data,
-            status: nextStatus,
+            status: currentStatus,
           } as CustomNodeData,
         };
       })
     );
 
-    if (!trace) {
-      setEdges((egs) => egs.map((e) => ({ ...e, animated: false, style: { stroke: "#444" } })));
-      return;
-    }
-
-    // Style edges to highlight the active paths (statically)
+    // Style edges to highlight the active paths (based on nodeStatuses map)
     setEdges((egs) =>
       egs.map((edge) => {
-        let isSourceActive = false;
-        let isTargetActive = false;
+        const sourceStatus = nodeStatuses[edge.source] || "PENDING";
+        const targetStatus = nodeStatuses[edge.target] || "PENDING";
 
-        const sourceNode = trace.nodes.find((tn) => tn.node_id === edge.source);
-        const targetNode = trace.nodes.find((tn) => tn.node_id === edge.target);
-
-        if (sourceNode && sourceNode.status === "SUCCESS") isSourceActive = true;
-        if (targetNode && (targetNode.status === "SUCCESS" || targetNode.status === "RUNNING")) isTargetActive = true;
-
-        const isActiveEdge = isSourceActive && isTargetActive;
+        // Connection animates if the source node has completed successfully
+        // and the target node is either running or has succeeded
+        const isSourceCompleted = sourceStatus === "SUCCESS";
+        const isTargetActive = targetStatus === "RUNNING" || targetStatus === "SUCCESS";
+        const isActiveEdge = isSourceCompleted && isTargetActive;
 
         return {
           ...edge,
+          animated: isActiveEdge,
           style: {
             stroke: isActiveEdge ? "#2563eb" : "#444",
             strokeWidth: isActiveEdge ? 2 : 1,
@@ -226,7 +218,7 @@ export const ExecutionGraph: React.FC = () => {
         };
       })
     );
-  }, [trace, selectedNodeId, setNodes, setEdges]);
+  }, [nodeStatuses, selectedNodeId, setNodes, setEdges]);
 
   const handleNodeClick = (_event: any, node: Node) => {
     selectNode(node.id);

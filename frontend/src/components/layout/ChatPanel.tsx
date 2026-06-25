@@ -5,6 +5,7 @@ import { ChatInput } from "../chat/ChatInput";
 import { EmptyState } from "../chat/EmptyState";
 import { useChat } from "../../hooks/useChat";
 import { useDocuments } from "../../hooks/useDocuments";
+import { useExecution } from "../../hooks/useExecution";
 
 interface ChatPanelProps {
   selectedDocumentIds: string[];
@@ -19,10 +20,50 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 }) => {
   const { messages, isLoading, processingPhase, submitQuery } = useChat();
   const { documents } = useDocuments();
+  const { replayState, activeNodeId, trace } = useExecution();
 
   const handleQuerySubmit = (query: string) => {
     submitQuery(query, selectedDocumentIds, onViewTrace);
   };
+
+  // Filter out the assistant's answer from display until replay completes
+  const displayedMessages = messages.filter((msg) => {
+    if (msg.sender === "assistant" && msg.traceId && trace && msg.traceId === trace.trace_id) {
+      return replayState === "COMPLETED";
+    }
+    return true;
+  });
+
+  // Determine active indicator phase from the replay state machine or direct loading
+  const getActivePhaseText = (): "Retrieving..." | "Evaluating..." | "Generating..." | null => {
+    if (isLoading && !trace) {
+      return processingPhase;
+    }
+    
+    if (trace && (replayState === "PLAYING" || replayState === "PAUSED")) {
+      switch (activeNodeId) {
+        case "retriever": 
+          return "Retrieving...";
+        case "evaluator": 
+          return "Evaluating...";
+        case "generator": 
+          return "Generating...";
+        // For other internal steps, map to evaluation/retrieval categories for user-facing elegance
+        case "router":
+        case "knowledge_refinement":
+        case "query_rewrite":
+          return "Evaluating...";
+        case "knowledge_search":
+          return "Retrieving...";
+        default: 
+          return "Generating...";
+      }
+    }
+    
+    return null;
+  };
+
+  const activePhaseText = getActivePhaseText();
 
   return (
     <main className="flex-1 flex flex-col min-w-0 bg-neutral-900/30">
@@ -39,22 +80,22 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       </div>
 
       {/* Message History / Empty State */}
-      {messages.length === 0 ? (
+      {displayedMessages.length === 0 ? (
         <EmptyState />
       ) : (
         <MessageList
-          messages={messages}
+          messages={displayedMessages}
           activeTraceId={activeTraceId}
           onViewTrace={onViewTrace}
         />
       )}
 
       {/* Temporary Ingestion/Pipeline Processing Indicator */}
-      <ProcessingIndicator phase={processingPhase} />
+      <ProcessingIndicator phase={activePhaseText} />
 
       {/* Chat Input */}
       <ChatInput
-        isLoading={isLoading}
+        isLoading={isLoading || replayState === "PLAYING"}
         hasDocuments={documents.length > 0}
         selectedDocCount={selectedDocumentIds.length}
         onSubmit={handleQuerySubmit}
