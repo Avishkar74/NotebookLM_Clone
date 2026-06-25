@@ -35,9 +35,14 @@ class VectorService:
         logger.info(f"Storing {len(vector_chunks)} vector chunks for document '{filename}' (ID: {document_id})")
         self.repository.upsert_chunks(vector_chunks)
 
-    def semantic_search(self, query_vector: List[float], top_k: int = 5) -> List[RetrievedChunk]:
+    def semantic_search(
+        self,
+        query_vector: List[float],
+        top_k: int = 5,
+        document_ids: Optional[List[str]] = None
+    ) -> List[RetrievedChunk]:
         """Queries the repository and returns matching domain chunks."""
-        return self.repository.search(query_vector, top_k=top_k)
+        return self.repository.search(query_vector, top_k=top_k, document_ids=document_ids)
 
     def delete_document(self, document_id: str):
         """Requests deletion of all vectors mapped to document_id from the vector store."""

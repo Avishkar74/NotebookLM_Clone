@@ -92,12 +92,29 @@ class VectorRepository:
             logger.error(f"Failed to upsert vectors to Qdrant: {str(e)}")
             raise e
 
-    def search(self, query_vector: List[float], top_k: int = 5) -> List[RetrievedChunk]:
+    def search(
+        self,
+        query_vector: List[float],
+        top_k: int = 5,
+        document_ids: Optional[List[str]] = None
+    ) -> List[RetrievedChunk]:
         """Performs similarity search in the collection and returns results in domain models."""
         try:
+            query_filter = None
+            if document_ids:
+                query_filter = rest_models.Filter(
+                    must=[
+                        rest_models.FieldCondition(
+                            key="document_id",
+                            match=rest_models.MatchAny(any=document_ids)
+                        )
+                    ]
+                )
+
             results = self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector,
+                query_filter=query_filter,
                 limit=top_k
             )
 

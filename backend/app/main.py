@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from app.config.settings import settings
 from app.config.logging import setup_logging
-from app.api import health, documents
+from app.api import health, documents, query, trace
 from app.services.document_service import DocumentService
 from app.repositories.vector_repository import VectorRepository
 import asyncio
@@ -75,6 +75,8 @@ def create_app() -> FastAPI:
     # Register routers
     app.include_router(health.router, prefix="/api", tags=["Health"])
     app.include_router(documents.router, prefix="/api", tags=["Documents"])
+    app.include_router(query.router, prefix="/api", tags=["Query"])
+    app.include_router(trace.router, prefix="/api", tags=["Trace"])
 
     return app
 
