@@ -10,6 +10,8 @@ from app.schemas.vector import VectorChunk, RetrievedChunk
 logger = logging.getLogger("app")
 
 class VectorRepository:
+    _in_memory_client: Optional[QdrantClient] = None
+
     def __init__(self, client: Optional[QdrantClient] = None):
         self.client = client
         self.collection_name = settings.QDRANT_COLLECTION
@@ -23,7 +25,9 @@ class VectorRepository:
                 )
             else:
                 logger.warning("Qdrant configuration is missing or incomplete. Using in-memory fallback client.")
-                self.client = QdrantClient(":memory:")
+                if VectorRepository._in_memory_client is None:
+                    VectorRepository._in_memory_client = QdrantClient(":memory:")
+                self.client = VectorRepository._in_memory_client
 
     def create_collection_if_not_exists(self, vector_size: int = 3072):
         """Verifies collection presence and dynamically creates it with the specified size and Cosine distance."""

@@ -36,7 +36,7 @@ def test_upsert_idempotency_and_mapping():
     
     chunks = [
         VectorChunk(
-            chunk_id="chunk-00000000-0000-0000-0000-000000000001",
+            chunk_id="00000000-0000-0000-0000-000000000001",
             document_id="doc_123",
             document_name="sample.pdf",
             chunk_index=0,
@@ -59,7 +59,7 @@ def test_upsert_idempotency_and_mapping():
     args, kwargs = mock_client.upsert.call_args
     points = kwargs["points"]
     assert len(points) == 1
-    assert points[0].id == "chunk-00000000-0000-0000-0000-000000000001"
+    assert points[0].id == "00000000-0000-0000-0000-000000000001"
     assert points[0].vector == [0.1] * 3072
     assert points[0].payload["document_id"] == "doc_123"
     assert points[0].payload["document_name"] == "sample.pdf"
@@ -87,6 +87,7 @@ def test_search_returns_domain_models():
     mock_client.search.assert_called_once_with(
         collection_name=repo.collection_name,
         query_vector=[0.2] * 3072,
+        query_filter=None,
         limit=5
     )
     assert len(results) == 1
@@ -119,6 +120,7 @@ def test_delete_by_document_id():
 
 def test_invalid_embedding_dimension_handling():
     mock_client = MagicMock()
+    mock_client.collection_exists.return_value = False
     mock_client.create_collection.side_effect = ValueError("Invalid dimensions configuration")
     
     repo = VectorRepository(client=mock_client)

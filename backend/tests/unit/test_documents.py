@@ -11,17 +11,7 @@ from app.config.constants import IngestionStatus
 @pytest.fixture(autouse=True)
 def cleanup_document_service():
     """Ensure service is fresh before each test."""
-    service = DocumentService()
-    service.documents.clear()
-    # Empty queue
-    while not service.queue.empty():
-        try:
-            service.queue.get_nowait()
-            service.queue.task_done()
-        except asyncio.QueueEmpty:
-            break
-        except ValueError:
-            break
+    DocumentService().reset()
 
 def test_upload_flow_and_status():
     # Mocking ingestion functions to avoid real file operations and OpenAI API calls

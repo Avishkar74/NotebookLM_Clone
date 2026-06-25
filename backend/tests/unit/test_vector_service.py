@@ -51,7 +51,11 @@ def test_semantic_search():
     service = VectorService(repository=mock_repo)
     results = service.semantic_search(query_vector=[0.1]*3072, top_k=3)
     
-    mock_repo.search.assert_called_once_with([0.1]*3072, top_k=3)
+    mock_repo.search.assert_called_once_with(
+        [0.1]*3072,
+        top_k=3,
+        document_ids=None
+    )
     assert results == []
 
 def test_delete_document():

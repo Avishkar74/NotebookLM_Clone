@@ -10,7 +10,13 @@ from app.config.settings import settings
 from app.ingestion.embedder import OpenAIEmbedder
 from app.services.vector_service import VectorService
 from app.services.trace_service import TraceService
-from app.schemas.query import QueryRequest, QueryResponseData, QueryResponseEnvelope, QueryResponseChunk, QueryConfidence
+from app.services.rag_nodes.evaluator_node import EvaluatorNode
+from app.services.rag_nodes.refinement_node import RefinementNode
+from app.services.rag_nodes.rewrite_node import RewriteNode
+from app.services.rag_nodes.search_node import SearchNode
+from app.services.rag_nodes.router_node import RouterNode
+
+from app.schemas.query import QueryRequest, QueryResponseData, QueryResponseChunk, QueryConfidence
 from app.schemas.trace import TraceResponseData, NodeEvent, CostEstimate
 
 logger = logging.getLogger("app")
@@ -21,6 +27,14 @@ class RAGService:
         self.trace_service = trace_service or TraceService()
         self.embedder = OpenAIEmbedder()
         self.openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        
+        # Initialize modular nodes
+        self.evaluator_node = EvaluatorNode(self.openai_client)
+        self.refinement_node = RefinementNode(self.openai_client)
+        self.rewrite_node = RewriteNode(self.openai_client)
+        self.search_node = SearchNode()
+        self.router_node = RouterNode()
+
         try:
             self.encoding = tiktoken.encoding_for_model(settings.LLM_MODEL)
         except KeyError:
@@ -30,34 +44,33 @@ class RAGService:
         return len(self.encoding.encode(text))
 
     async def execute_basic_rag(self, request: QueryRequest) -> QueryResponseData:
-        """Executes the Basic RAG Pipeline: Retrieve -> Generate.
+        """Executes the Corrective RAG (CRAG) Pipeline.
         
-        Saves the execution trace and returns the generated answer with sources.
+        Saves the dynamic execution trace and returns the generated answer.
         """
         query_text = request.query
         document_ids = request.document_ids
         top_k = request.top_k or 5
+        use_web_search = request.options.use_web_search if request.options else True
         
-        # Start Trace
+        # Start Trace tracking
         query_id = str(uuid.uuid4())
         trace_id = f"trace_{uuid.uuid4().hex[:8]}"
         pipeline_start_time = time.time()
         pipeline_started_at = datetime.now(UTC)
         
         nodes: List[NodeEvent] = []
-        execution_path = ["RETRIEVER", "GENERATOR"]
+        
+        # Total tokens trackers for cost estimation
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        total_embedding_tokens = self._count_tokens(query_text)
         
         # --- 1. RETRIEVER NODE ---
         retriever_start_time = time.time()
         retriever_started_at = datetime.now(UTC)
         
-        # Count query tokens
-        query_tokens = self._count_tokens(query_text)
-        
-        # Embed query
         query_vector = self.embedder.embed_chunks([query_text])[0]
-        
-        # Semantic search
         retrieved_chunks = self.vector_service.semantic_search(
             query_vector=query_vector,
             top_k=top_k,
@@ -68,9 +81,9 @@ class RAGService:
         retriever_duration_ms = (time.time() - retriever_start_time) * 1000
         
         retriever_node = NodeEvent(
-            node_id="node_retrieval_001",
-            node_name="Semantic Search",
-            display_name="Retrieving",
+            node_id="retriever",
+            node_name="Retriever",
+            display_name="Retrieving Documents",
             type="retrieval",
             status="SUCCESS",
             started_at=retriever_started_at,
@@ -100,17 +113,193 @@ class RAGService:
         )
         nodes.append(retriever_node)
         
-        # --- 2. GENERATOR NODE ---
+        # --- 2. EVALUATOR NODE ---
+        evaluator_start_time = time.time()
+        evaluator_started_at = datetime.now(UTC)
+        
+        eval_result = self.evaluator_node.evaluate(query_text, retrieved_chunks)
+        verdict = eval_result["decision"]
+        confidence_val = eval_result["confidence"]
+        reasoning = eval_result["reasoning"]
+        
+        # Estimate evaluator tokens (since we mock or run LLM)
+        eval_input_str = query_text + "".join([c.text for c in retrieved_chunks])
+        eval_prompt_tokens = self._count_tokens(eval_input_str)
+        eval_completion_tokens = self._count_tokens(reasoning) + 20 # buffer
+        total_prompt_tokens += eval_prompt_tokens
+        total_completion_tokens += eval_completion_tokens
+        
+        evaluator_completed_at = datetime.now(UTC)
+        evaluator_duration_ms = (time.time() - evaluator_start_time) * 1000
+        
+        evaluator_node = NodeEvent(
+            node_id="evaluator",
+            node_name="Retrieval Evaluator",
+            display_name="Evaluating Context",
+            type="evaluation",
+            status="SUCCESS",
+            started_at=evaluator_started_at,
+            completed_at=evaluator_completed_at,
+            duration_ms=evaluator_duration_ms,
+            input={
+                "query": query_text,
+                "chunks_evaluated": len(retrieved_chunks)
+            },
+            output={
+                "decision": verdict,
+                "confidence": confidence_val,
+                "reasoning": reasoning
+            },
+            metadata={
+                "evaluator_model": settings.LLM_MODEL,
+                "tokens_used": eval_prompt_tokens + eval_completion_tokens
+            }
+        )
+        nodes.append(evaluator_node)
+        
+        # --- 3. ROUTER NODE ---
+        # Resolve branch routing properties
+        routing = self.router_node.get_execution_path(verdict)
+        decision_path = routing["decision_path"]
+        execution_path = routing["execution_path"]
+        run_refiner = routing["run_refiner"]
+        run_search = routing["run_search"]
+        run_rewrite = routing["run_rewrite"]
+        
+        # Bypass search if options explicitly disable web search
+        if not use_web_search:
+            logger.info("Web search is disabled in query options. Skipping external search branch.")
+            run_search = False
+            run_rewrite = False
+            if decision_path == "INCORRECT":
+                # Override to bypass search
+                decision_path = "CORRECT"
+                execution_path = ["RETRIEVER", "EVALUATOR", "KNOWLEDGE_REFINEMENT", "GENERATOR"]
+                run_refiner = True
+        
+        # --- 4. REWRITE NODE (INCORRECT branch) ---
+        rewritten_query = query_text
+        if run_rewrite:
+            rewrite_start_time = time.time()
+            rewrite_started_at = datetime.now(UTC)
+            
+            rewritten_query = self.rewrite_node.rewrite(query_text)
+            
+            rewrite_prompt_tokens = self._count_tokens(query_text)
+            rewrite_completion_tokens = self._count_tokens(rewritten_query)
+            total_prompt_tokens += rewrite_prompt_tokens
+            total_completion_tokens += rewrite_completion_tokens
+            
+            rewrite_completed_at = datetime.now(UTC)
+            rewrite_duration_ms = (time.time() - rewrite_start_time) * 1000
+            
+            rewrite_node = NodeEvent(
+                node_id="query_rewrite",
+                node_name="Query Rewrite",
+                display_name="Rewriting Query",
+                type="query_rewrite",
+                status="SUCCESS",
+                started_at=rewrite_started_at,
+                completed_at=rewrite_completed_at,
+                duration_ms=rewrite_duration_ms,
+                input={"original_query": query_text},
+                output={"rewritten_query": rewritten_query},
+                metadata={
+                    "model": settings.LLM_MODEL,
+                    "temperature": 0.2
+                }
+            )
+            nodes.append(rewrite_node)
+            
+        # --- 5. WEB SEARCH NODE (AMBIGUOUS / INCORRECT branch) ---
+        external_context = ""
+        results_found = 0
+        selected_results = 0
+        if run_search:
+            search_start_time = time.time()
+            search_started_at = datetime.now(UTC)
+            
+            search_res = await self.search_node.search(rewritten_query)
+            external_context = search_res["external_context"]
+            results_found = search_res["results_found"]
+            selected_results = search_res["selected_results"]
+            
+            search_completed_at = datetime.now(UTC)
+            search_duration_ms = (time.time() - search_start_time) * 1000
+            
+            search_node = NodeEvent(
+                node_id="knowledge_search",
+                node_name="Knowledge Search",
+                display_name="Web Searching",
+                type="search",
+                status="SUCCESS",
+                started_at=search_started_at,
+                completed_at=search_completed_at,
+                duration_ms=search_duration_ms,
+                input={"query": rewritten_query},
+                output={
+                    "results_found": results_found,
+                    "selected_results": selected_results,
+                    "external_context": external_context[:200] + "..." if external_context else ""
+                },
+                metadata={"search_engine": "Tavily API"}
+            )
+            nodes.append(search_node)
+            
+        # --- 6. REFINEMENT NODE (CORRECT / AMBIGUOUS branch) ---
+        refined_context = ""
+        if run_refiner:
+            refine_start_time = time.time()
+            refine_started_at = datetime.now(UTC)
+            
+            refined_context = self.refinement_node.refine(query_text, retrieved_chunks)
+            
+            refine_prompt_tokens = self._count_tokens(query_text + "".join([c.text for c in retrieved_chunks]))
+            refine_completion_tokens = self._count_tokens(refined_context)
+            total_prompt_tokens += refine_prompt_tokens
+            total_completion_tokens += refine_completion_tokens
+            
+            refine_completed_at = datetime.now(UTC)
+            refine_duration_ms = (time.time() - refine_start_time) * 1000
+            
+            refine_node = NodeEvent(
+                node_id="knowledge_refinement",
+                node_name="Knowledge Refinement",
+                display_name="Refining Context",
+                type="refinement",
+                status="SUCCESS",
+                started_at=refine_started_at,
+                completed_at=refine_completed_at,
+                duration_ms=refine_duration_ms,
+                input={
+                    "input_chunks": len(retrieved_chunks),
+                    "query": query_text
+                },
+                output={
+                    "refined_context": refined_context[:200] + "..." if refined_context else ""
+                },
+                metadata={
+                    "model": settings.LLM_MODEL,
+                    "temperature": 0.0
+                }
+            )
+            nodes.append(refine_node)
+            
+        # --- 7. GENERATOR NODE ---
         generator_start_time = time.time()
         generator_started_at = datetime.now(UTC)
         
-        # Build context
-        if retrieved_chunks:
-            combined_context = "\n\n".join([f"[Source: {c.filename}, Page: {c.page_number}] {c.text}" for c in retrieved_chunks])
-        else:
+        # Combine contexts
+        if decision_path == "CORRECT":
+            combined_context = refined_context
+        elif decision_path == "INCORRECT":
+            combined_context = external_context
+        else: # AMBIGUOUS
+            combined_context = f"Refined internal context:\n{refined_context}\n\nExternal web context:\n{external_context}"
+            
+        if not combined_context.strip():
             combined_context = "No relevant context found."
             
-        # Render system and user prompts
         system_prompt = "You are an AI assistant answering questions using only the provided context."
         user_prompt_template = (
             "Instructions\n\n"
@@ -126,11 +315,11 @@ class RAGService:
         )
         user_prompt = user_prompt_template.format(question=query_text, combined_context=combined_context)
         
-        prompt_tokens = self._count_tokens(system_prompt + user_prompt)
+        gen_prompt_tokens = self._count_tokens(system_prompt + user_prompt)
+        total_prompt_tokens += gen_prompt_tokens
         
-        # LLM Invocation (OpenAI Chat API with gpt-4.1-mini)
         answer = ""
-        completion_tokens = 0
+        gen_completion_tokens = 0
         if settings.OPENAI_API_KEY and settings.OPENAI_API_KEY != "mock-openai-key":
             try:
                 chat_completion = self.openai_client.chat.completions.create(
@@ -142,23 +331,25 @@ class RAGService:
                     temperature=0.3
                 )
                 answer = chat_completion.choices[0].message.content or ""
-                completion_tokens = self._count_tokens(answer)
+                gen_completion_tokens = self._count_tokens(answer)
+                total_completion_tokens += gen_completion_tokens
             except Exception as e:
-                logger.error(f"Error calling OpenAI Chat Completion: {str(e)}")
+                logger.error(f"Error calling OpenAI Generator in RAGService: {str(e)}")
                 answer = "Error generating answer due to API issues."
         else:
-            # Fallback mock answer for development/testing
-            logger.warning("Using mock response from Generator due to missing or mock API key.")
-            answer = f"Mocked answer for query '{query_text}' based on {len(retrieved_chunks)} source chunks."
-            completion_tokens = self._count_tokens(answer)
+            # Fallback mock answer
+            logger.warning("Using mock response from Generator due to missing API Key.")
+            answer = f"Mocked response for '{query_text}'. Verdict decision branch executed: {decision_path}."
+            gen_completion_tokens = self._count_tokens(answer)
+            total_completion_tokens += gen_completion_tokens
 
         generator_completed_at = datetime.now(UTC)
         generator_duration_ms = (time.time() - generator_start_time) * 1000
         
         generator_node = NodeEvent(
-            node_id="node_generator_001",
-            node_name="Answer Generator",
-            display_name="Generating",
+            node_id="generator",
+            node_name="Generator",
+            display_name="Generating Answer",
             type="generation",
             status="SUCCESS",
             started_at=generator_started_at,
@@ -166,42 +357,36 @@ class RAGService:
             duration_ms=generator_duration_ms,
             input={
                 "query": query_text,
-                "context_chunks_count": len(retrieved_chunks),
-                "context_tokens_estimate": prompt_tokens
+                "context_length_tokens": gen_prompt_tokens
             },
             output={
                 "answer": answer,
-                "answer_length_tokens": completion_tokens
+                "answer_length_tokens": gen_completion_tokens
             },
             metadata={
                 "generator_model": settings.LLM_MODEL,
-                "temperature": 0.3,
-                "total_tokens_used": prompt_tokens + completion_tokens
+                "temperature": 0.3
             }
         )
         nodes.append(generator_node)
         
-        # --- 3. POST-PROCESSING & COST ESTIMATION ---
+        # --- 8. POST-PROCESSING & COST ESTIMATING ---
         pipeline_completed_at = datetime.now(UTC)
         pipeline_duration_ms = (time.time() - pipeline_start_time) * 1000
         
-        # Estimating Cost based on pricing for text-embedding-3-large and gpt-4.1-mini (approximate/mock rates)
-        # text-embedding-3-large: $0.13 / 1M tokens
-        # gpt-4.1-mini (input): $0.15 / 1M tokens
-        # gpt-4.1-mini (output): $0.60 / 1M tokens
-        cost_embedding = query_tokens * (0.13 / 1_000_000)
-        cost_generator_input = prompt_tokens * (0.15 / 1_000_000)
-        cost_generator_output = completion_tokens * (0.60 / 1_000_000)
+        cost_embedding = total_embedding_tokens * (0.13 / 1_000_000)
+        cost_generator_input = total_prompt_tokens * (0.15 / 1_000_000)
+        cost_generator_output = total_completion_tokens * (0.60 / 1_000_000)
         
         cost_estimate = CostEstimate(
             currency="USD",
             embedding_api=round(cost_embedding, 6),
-            evaluator_api=0.0,
+            evaluator_api=0.0, # Not split out
             generator_api=round(cost_generator_input + cost_generator_output, 6),
             total=round(cost_embedding + cost_generator_input + cost_generator_output, 6)
         )
         
-        # Form Trace
+        # Form trace response structure
         trace_data = TraceResponseData(
             trace_id=trace_id,
             query_id=query_id,
@@ -217,7 +402,7 @@ class RAGService:
         # Save trace
         self.trace_service.save_trace(trace_id, trace_data)
         
-        # Form retrieved chunks list
+        # Form retrieved chunks
         response_chunks = [
             QueryResponseChunk(
                 chunk_id=c.chunk_id,
@@ -230,13 +415,11 @@ class RAGService:
             ) for c in retrieved_chunks
         ]
         
-        # Build confidence scores
-        # Basic RAG simple heuristic for scores
-        retrieval_confidence = retrieved_chunks[0].similarity_score if retrieved_chunks else 0.0
+        # Formulate confidence values
         confidence = QueryConfidence(
-            overall=round(retrieval_confidence * 0.9, 2),
-            retrieval=round(retrieval_confidence, 2),
-            evaluation=None,
+            overall=round(confidence_val * 0.9, 2),
+            retrieval=round(retriever_node.output.get("chunks", [{}])[0].get("similarity_score", 0.0) if retrieved_chunks else 0.0, 2),
+            evaluation=round(confidence_val, 2),
             generation=0.90
         )
         

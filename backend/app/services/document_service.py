@@ -51,6 +51,12 @@ class DocumentService:
         
         self._initialized = True
 
+    def reset(self):
+        """Resets service documents and recreates the asyncio Queue for the current loop."""
+        self.documents.clear()
+        self.queue = asyncio.Queue()
+        self.worker_task = None
+
     def start_worker(self):
         """Starts the sequential processing background worker loop if not already running."""
         if self.worker_task is None or self.worker_task.done():
