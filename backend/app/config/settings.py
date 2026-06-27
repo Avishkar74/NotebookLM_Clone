@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = "http://localhost:5173"
     
     # CORS
-    ALLOWED_ORIGINS: str = "http://localhost:5173"
+    ALLOWED_ORIGINS: str = "http://localhost:5173,https://notebooklmcloned.netlify.app"
 
     # OpenAI Settings
     OPENAI_API_KEY: str
