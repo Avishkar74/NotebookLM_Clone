@@ -52,8 +52,8 @@ export const UploadArea = () => {
         onClick={onButtonClick}
         className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all duration-300 relative overflow-hidden ${
           isDragActive 
-            ? "border-primary bg-primary/10 shadow-lg shadow-primary/5" 
-            : "border-neutral-800 bg-neutral-900/30 hover:border-neutral-700 hover:bg-neutral-900/40"
+            ? "border-blue-400 bg-blue-50 shadow-lg shadow-blue-100/60" 
+            : "border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-slate-100/70"
         }`}
       >
         <input
@@ -67,19 +67,19 @@ export const UploadArea = () => {
         
         {isUploading ? (
           <div className="flex flex-col items-center justify-center space-y-2 py-2">
-            <Loader className="h-8 w-8 text-primary animate-spin" />
-            <span className="text-xs font-semibold text-neutral-300">Queuing files...</span>
+            <Loader className="h-8 w-8 text-blue-600 animate-spin" />
+            <span className="text-xs font-semibold text-slate-700">Queuing files...</span>
           </div>
         ) : (
           <div className="space-y-3">
-            <div className="mx-auto w-12 h-12 rounded-xl bg-neutral-800/80 border border-neutral-700/50 flex items-center justify-center text-neutral-400 group-hover:text-primary transition duration-300">
+            <div className="mx-auto w-12 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-500 group-hover:text-blue-600 transition duration-300">
               <Upload className="h-6 w-6" />
             </div>
             <div>
-              <span className="block text-xs font-semibold text-neutral-200">
-                Drag & drop files or <span className="text-primary hover:text-primary-light">browse</span>
+              <span className="block text-xs font-semibold text-slate-800">
+                Drag & drop files or <span className="text-blue-700 hover:text-blue-800">browse</span>
               </span>
-              <span className="block text-[10px] text-neutral-500 mt-1">
+              <span className="block text-[10px] text-slate-500 mt-1">
                 Supports PDF or TXT up to 50MB
               </span>
             </div>

@@ -51,7 +51,7 @@ class RAGService:
         query_text = request.query
         document_ids = request.document_ids
         top_k = request.top_k or 5
-        use_web_search = request.options.use_web_search if request.options else True
+        use_web_search = request.options.use_web_search if request.options and request.options.use_web_search is not None else True
         session_id = request.session_id if hasattr(request, "session_id") else None
         if not session_id:
             session_id = "session_001"
@@ -184,11 +184,9 @@ class RAGService:
             logger.info("Web search is disabled in query options. Skipping external search branch.")
             run_search = False
             run_rewrite = False
-            if decision_path == "INCORRECT":
-                # Override to bypass search
-                decision_path = "CORRECT"
-                execution_path = ["RETRIEVER", "EVALUATOR", "KNOWLEDGE_REFINEMENT", "GENERATOR"]
+            if decision_path != "CORRECT":
                 run_refiner = True
+                execution_path = ["RETRIEVER", "EVALUATOR", "KNOWLEDGE_REFINEMENT", "GENERATOR"]
         
         router_completed_at = datetime.now(UTC)
         router_duration_ms = (time.time() - router_start_time) * 1000

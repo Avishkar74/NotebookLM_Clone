@@ -42,7 +42,7 @@ export const ProcessingQueue: React.FC = () => {
     }
 
     return (
-      <div className="mt-3 space-y-1.5 pl-7 border-l-2 border-neutral-800 ml-4.5 py-1">
+      <div className="mt-3 space-y-1.5 pl-7 border-l-2 border-slate-200 ml-4.5 py-1">
         {stagesList.map((stage, idx) => {
           const isLast = idx === stagesList.length - 1;
           const isActive = isLast && status !== "COMPLETED" && status !== "FAILED";
@@ -62,17 +62,17 @@ export const ProcessingQueue: React.FC = () => {
                 <span 
                   className={`text-[10px] tracking-wide font-medium ${
                     isActive 
-                      ? "text-amber-400 font-semibold" 
+                      ? "text-amber-600 font-semibold" 
                       : stage.includes("Failed") 
-                        ? "text-red-400" 
-                        : "text-neutral-400"
+                        ? "text-red-500" 
+                        : "text-slate-500"
                   }`}
                 >
                   {stage}
                 </span>
               </div>
               {!isLast && (
-                <ArrowDown className="h-2.5 w-2.5 text-neutral-800 my-0.5 ml-0.75" />
+                <ArrowDown className="h-2.5 w-2.5 text-slate-300 my-0.5 ml-0.75" />
               )}
             </div>
           );
@@ -82,19 +82,19 @@ export const ProcessingQueue: React.FC = () => {
   };
 
   return (
-    <div className="p-4 border-b border-neutral-800 shrink-0">
-      <span className="text-[10px] uppercase tracking-wider font-bold text-neutral-500">Processing Queue ({uploadQueue.length})</span>
-      <div className="mt-3 space-y-3">
+    <div className="p-4 border-b border-slate-200 shrink-0 flex flex-col min-h-0">
+      <span className="text-[10px] uppercase tracking-wider font-bold text-slate-500">Processing Queue ({uploadQueue.length})</span>
+      <div className="mt-3 space-y-3 overflow-y-auto app-scrollbar pr-1 min-h-0 max-h-72">
         {uploadQueue.map((doc) => (
           <div 
             key={doc.id} 
-            className="p-3.5 rounded-xl bg-neutral-900 border border-neutral-800/80 shadow-md shadow-neutral-950/20"
+            className="p-3.5 rounded-xl bg-white border border-slate-200 shadow-md shadow-slate-200/50"
           >
             <div className="flex items-center space-x-3">
-              <FileText className={`h-4 w-4 ${doc.status === 'FAILED' ? 'text-red-400' : 'text-amber-400'} shrink-0`} />
+              <FileText className={`h-4 w-4 ${doc.status === 'FAILED' ? 'text-red-500' : 'text-amber-500'} shrink-0`} />
               <div className="truncate flex-1">
-                <span className="block text-xs font-semibold text-neutral-200 truncate">{doc.name}</span>
-                <span className="text-[9px] text-neutral-500">
+                <span className="block text-xs font-semibold text-slate-800 truncate">{doc.name}</span>
+                <span className="text-[9px] text-slate-500">
                   {doc.sizeBytes ? `${(doc.sizeBytes / 1024).toFixed(0)} KB` : ""}
                 </span>
               </div>
@@ -106,7 +106,7 @@ export const ProcessingQueue: React.FC = () => {
             {renderStages(doc)}
 
             {doc.error && (
-              <p className="text-[9px] text-red-400 mt-2 pl-7 font-mono font-medium leading-relaxed">
+              <p className="text-[9px] text-red-500 mt-2 pl-7 font-mono font-medium leading-relaxed">
                 Error: {doc.error}
               </p>
             )}

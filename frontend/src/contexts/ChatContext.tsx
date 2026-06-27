@@ -59,7 +59,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     try {
       // 1. Post query to backend
-      const queryResult = await api.askQuestion(query, documentIds);
+      const queryResult = await api.askQuestion(query, documentIds, undefined, {
+        use_web_search: true,
+        return_retrieved_chunks: true,
+      });
       
       // Clear phase timers
       clearTimeout(timer1);

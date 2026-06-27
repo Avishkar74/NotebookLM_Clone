@@ -7,7 +7,7 @@ export const ProcessingIndicator: React.FC<ProcessingIndicatorProps> = ({ phase 
 
   return (
     <div className="flex justify-start px-6 py-2 animate-slide-up">
-      <div className="flex items-center space-x-3 bg-neutral-900/60 border border-neutral-850 px-4 py-3 rounded-2xl rounded-bl-none shadow-md shadow-neutral-950/20">
+      <div className="flex items-center space-x-3 bg-white border border-slate-200 px-4 py-3 rounded-2xl rounded-bl-none shadow-md shadow-slate-200/40">
         <div className="flex items-center space-x-1">
           <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse"></span>
           <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse [animation-delay:0.2s]"></span>

@@ -14,6 +14,7 @@ def test_collection_auto_creation_not_exists():
     
     mock_client.collection_exists.assert_called_once_with(repo.collection_name)
     mock_client.create_collection.assert_called_once()
+    mock_client.create_payload_index.assert_called_once()
     # Verify Cosine is used
     args, kwargs = mock_client.create_collection.call_args
     assert kwargs["collection_name"] == repo.collection_name
@@ -29,6 +30,7 @@ def test_collection_already_exists():
     
     mock_client.collection_exists.assert_called_once_with(repo.collection_name)
     mock_client.create_collection.assert_not_called()
+    mock_client.create_payload_index.assert_called_once()
 
 def test_upsert_idempotency_and_mapping():
     mock_client = MagicMock()
@@ -79,14 +81,16 @@ def test_search_returns_domain_models():
         "page_number": 4,
         "text": "Multi-head attention allows..."
     }
-    mock_client.search.return_value = [mock_hit]
+    mock_response = MagicMock()
+    mock_response.points = [mock_hit]
+    mock_client.query_points.return_value = mock_response
     
     repo = VectorRepository(client=mock_client)
     results = repo.search(query_vector=[0.2] * 3072, top_k=5)
     
-    mock_client.search.assert_called_once_with(
+    mock_client.query_points.assert_called_once_with(
         collection_name=repo.collection_name,
-        query_vector=[0.2] * 3072,
+        query=[0.2] * 3072,
         query_filter=None,
         limit=5
     )
@@ -98,6 +102,29 @@ def test_search_returns_domain_models():
     assert results[0].page_number == 4
     assert results[0].text == "Multi-head attention allows..."
     assert results[0].similarity_score == 0.89
+
+def test_upsert_batches_large_payloads():
+    mock_client = MagicMock()
+    repo = VectorRepository(client=mock_client)
+
+    chunks = []
+    for index in range(151):
+        chunks.append(
+            VectorChunk(
+                chunk_id=f"00000000-0000-0000-0000-{index:012d}",
+                document_id="doc_123",
+                document_name="sample.pdf",
+                chunk_index=index,
+                page_number=1,
+                text=f"chunk text {index}",
+                created_at=datetime.now(UTC),
+                vector=[0.1] * 3072
+            )
+        )
+
+    repo.upsert_chunks(chunks)
+
+    assert mock_client.upsert.call_count == 3
 
 def test_delete_by_document_id():
     mock_client = MagicMock()

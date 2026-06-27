@@ -2,6 +2,7 @@ import os
 import io
 import pytest
 import asyncio
+from datetime import datetime, UTC
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from app.main import app
@@ -93,3 +94,40 @@ def test_get_nonexistent_document():
     with TestClient(app) as client:
         response = client.get("/api/documents/non-existent-uuid")
         assert response.status_code == 404
+
+def test_list_documents_status_filter():
+    service = DocumentService()
+    service.reset()
+
+    service.documents["doc_completed"] = {
+        "document_id": "doc_completed",
+        "filename": "ready.pdf",
+        "file_path": "ready.pdf",
+        "file_size_bytes": 123,
+        "overall_status": IngestionStatus.COMPLETED,
+        "chunks_count": 2,
+        "embeddings_stored": 2,
+        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "updated_at": datetime(2026, 1, 1, 0, 1, tzinfo=UTC),
+        "metadata": {},
+        "chunks": [],
+        "stages": {}
+    }
+    service.documents["doc_failed"] = {
+        "document_id": "doc_failed",
+        "filename": "failed.pdf",
+        "file_path": "failed.pdf",
+        "file_size_bytes": 123,
+        "overall_status": IngestionStatus.FAILED,
+        "chunks_count": 0,
+        "embeddings_stored": 0,
+        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+        "updated_at": datetime(2026, 1, 1, 0, 1, tzinfo=UTC),
+        "metadata": {},
+        "chunks": [],
+        "stages": {}
+    }
+
+    completed = service.list_documents(status=IngestionStatus.COMPLETED)
+    assert completed.total_count == 1
+    assert completed.documents[0].document_id == "doc_completed"

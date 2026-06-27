@@ -9,13 +9,11 @@ import { useExecution } from "../../hooks/useExecution";
 
 interface ChatPanelProps {
   selectedDocumentIds: string[];
-  activeTraceId: string | null;
   onViewTrace: (traceId: string) => Promise<void>;
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
   selectedDocumentIds,
-  activeTraceId,
   onViewTrace,
 }) => {
   const { messages, isLoading, processingPhase, submitQuery } = useChat();
@@ -25,6 +23,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const handleQuerySubmit = (query: string) => {
     submitQuery(query, selectedDocumentIds, onViewTrace);
   };
+
+  const progressLabel =
+    processingPhase === "Retrieving..."
+      ? "Retrieving documents..."
+      : processingPhase === "Evaluating..."
+        ? "Evaluating retrieved context..."
+        : processingPhase === "Generating..."
+          ? "Generating answer..."
+          : null;
+
+  const headerStatusLabel = progressLabel ?? (selectedDocumentIds.length > 0 ? `${selectedDocumentIds.length} source(s) selected` : null);
 
   // Filter out the assistant's answer from display until replay completes
   const displayedMessages = messages.filter((msg) => {
@@ -66,27 +75,26 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const activePhaseText = getActivePhaseText();
 
   return (
-    <main className="flex-1 flex flex-col min-w-0 bg-neutral-900/30">
+    <main className="flex-1 flex flex-col min-w-0 rounded-3xl border border-slate-200 bg-white shadow-lg overflow-hidden min-h-0">
       {/* Panel Header */}
-      <div className="p-4 border-b border-neutral-800 shrink-0 flex items-center justify-between">
-        <h2 className="text-sm font-semibold tracking-wide uppercase text-neutral-400">
+      <div className="p-4 border-b border-slate-200 shrink-0 flex items-center justify-between bg-slate-50/80">
+        <h2 className="text-sm font-semibold tracking-wide uppercase text-slate-600">
           Chat Session
         </h2>
-        {selectedDocumentIds.length > 0 && (
-          <div className="text-[10px] text-neutral-500 font-semibold bg-neutral-950 border border-neutral-850 px-2.5 py-1 rounded-full">
-            Searching: <span className="text-primary-light">{selectedDocumentIds.length} source(s)</span>
+        {headerStatusLabel && (
+          <div className="text-[10px] text-slate-500 font-semibold bg-white border border-slate-200 px-2.5 py-1 rounded-full shadow-sm">
+            <span className="text-blue-700">{headerStatusLabel}</span>
           </div>
         )}
       </div>
 
       {/* Message History / Empty State */}
+      <div className="flex-1 min-h-0 overflow-hidden">
       {displayedMessages.length === 0 ? (
         <EmptyState />
       ) : (
         <MessageList
           messages={displayedMessages}
-          activeTraceId={activeTraceId}
-          onViewTrace={onViewTrace}
         />
       )}
 
@@ -100,6 +108,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         selectedDocCount={selectedDocumentIds.length}
         onSubmit={handleQuerySubmit}
       />
+      </div>
     </main>
   );
 };

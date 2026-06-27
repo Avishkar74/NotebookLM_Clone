@@ -188,6 +188,7 @@ class DocumentService:
 
         except Exception as e:
             logger.error(f"Failed to ingest document {doc['filename']}: {str(e)}")
+            self._cleanup_failed_ingestion(document_id, doc)
             # Mark current stage as FAILED
             for stage_name, stage_data in stages.items():
                 if stage_data["status"] == "IN_PROGRESS":
@@ -195,6 +196,21 @@ class DocumentService:
                     break
             doc["overall_status"] = IngestionStatus.FAILED
             doc["updated_at"] = datetime.now(UTC)
+
+    def _cleanup_failed_ingestion(self, document_id: str, doc: Dict[str, Any]):
+        """Removes partially written artifacts while preserving the failed document record."""
+        file_path = doc.get("file_path")
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"Removed failed ingestion file for document {document_id}.")
+            except Exception as e:
+                logger.error(f"Error removing failed ingestion file {file_path}: {str(e)}")
+
+        try:
+            self.vector_service.delete_document(document_id)
+        except Exception as e:
+            logger.error(f"Error cleaning up vectors for failed document {document_id}: {str(e)}")
 
     async def queue_document(self, filename: str, content: bytes, file_metadata: Optional[Dict[str, Any]] = None) -> DocumentResponse:
         """Saves file to disk, initializes status, and adds it to the ingestion queue."""
@@ -301,8 +317,12 @@ class DocumentService:
             updated_at=doc["updated_at"]
         )
 
-    def list_documents(self) -> DocumentListResponse:
-        docs_list = [self._map_to_response(doc) for doc in self.documents.values()]
+    def list_documents(self, status: Optional[IngestionStatus] = None) -> DocumentListResponse:
+        docs = self.documents.values()
+        if status is not None:
+            docs = [doc for doc in docs if doc["overall_status"] == status]
+
+        docs_list = [self._map_to_response(doc) for doc in docs]
         return DocumentListResponse(
             documents=docs_list,
             total_count=len(docs_list)

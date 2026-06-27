@@ -35,4 +35,5 @@ export interface TraceResponseData {
   nodes: NodeEvent[];
   final_answer: string;
   metadata: Record<string, any>;
+  execution_path?: string[];
 }

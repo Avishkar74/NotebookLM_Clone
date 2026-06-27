@@ -1,5 +1,6 @@
 import logging
 import uuid
+import time
 from typing import List, Optional
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as rest_models
@@ -11,6 +12,8 @@ logger = logging.getLogger("app")
 
 class VectorRepository:
     _in_memory_client: Optional[QdrantClient] = None
+    _upsert_batch_size = 75
+    _upsert_max_retries = 3
 
     def __init__(self, client: Optional[QdrantClient] = None):
         self.client = client
@@ -44,9 +47,25 @@ class VectorRepository:
                 )
             else:
                 logger.info(f"Collection '{self.collection_name}' already exists. Skipping provisioning.")
+
+            self._ensure_payload_indexes()
         except Exception as e:
             logger.error(f"Error provisioning collection '{self.collection_name}': {str(e)}")
             raise e
+
+    def _ensure_payload_indexes(self):
+        """Creates payload indexes required by document filters."""
+        try:
+            self.client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="document_id",
+                field_schema=rest_models.PayloadSchemaType.KEYWORD,
+                wait=True
+            )
+            logger.info(f"Ensured payload index for field 'document_id' on collection '{self.collection_name}'.")
+        except Exception as e:
+            # Qdrant may already have the index or the collection may not be fully ready yet.
+            logger.info(f"Skipping payload index setup for '{self.collection_name}': {str(e)}")
 
     def upsert_chunks(self, chunks: List[VectorChunk]):
         """Upserts a list of VectorChunks into the Qdrant collection."""
@@ -86,15 +105,43 @@ class VectorRepository:
             )
 
         try:
-            if points:
-                logger.info(f"Upserting {len(points)} points into Qdrant collection '{self.collection_name}'")
-                self.client.upsert(
-                    collection_name=self.collection_name,
-                    points=points
-                )
+            if not points:
+                return
+
+            for batch_index in range(0, len(points), self._upsert_batch_size):
+                batch = points[batch_index : batch_index + self._upsert_batch_size]
+                batch_number = batch_index // self._upsert_batch_size + 1
+                self._upsert_batch_with_retry(batch, batch_number)
         except Exception as e:
             logger.error(f"Failed to upsert vectors to Qdrant: {str(e)}")
             raise e
+
+    def _upsert_batch_with_retry(self, batch: List[rest_models.PointStruct], batch_number: int):
+        """Writes a batch of points with a small exponential backoff."""
+        last_error = None
+        for attempt in range(1, self._upsert_max_retries + 1):
+            try:
+                logger.info(
+                    f"Upserting batch {batch_number} with {len(batch)} points into Qdrant collection '{self.collection_name}'"
+                )
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    points=batch,
+                    wait=True
+                )
+                return
+            except Exception as e:
+                last_error = e
+                if attempt >= self._upsert_max_retries:
+                    break
+                delay = 0.5 * (2 ** (attempt - 1))
+                logger.warning(
+                    f"Qdrant upsert batch {batch_number} failed on attempt {attempt}/{self._upsert_max_retries}: {str(e)}. Retrying in {delay:.1f}s."
+                )
+                time.sleep(delay)
+
+        if last_error:
+            raise last_error
 
     def search(
         self,
@@ -115,15 +162,16 @@ class VectorRepository:
                     ]
                 )
 
-            results = self.client.search(
+            results = self.client.query_points(
                 collection_name=self.collection_name,
-                query_vector=query_vector,
+                query=query_vector,
                 query_filter=query_filter,
                 limit=top_k
             )
 
+            points = getattr(results, "points", results)
             retrieved = []
-            for hit in results:
+            for hit in points:
                 payload = hit.payload or {}
                 retrieved.append(
                     RetrievedChunk(

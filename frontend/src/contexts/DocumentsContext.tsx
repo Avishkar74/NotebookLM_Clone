@@ -26,7 +26,7 @@ export const DocumentsProvider: React.FC<{ children: ReactNode }> = ({ children 
     setIsLoading(true);
     setError(null);
     try {
-      const response = await api.getDocuments();
+      const response = await api.getDocuments("COMPLETED");
       // Map API document structures to UI document model
       const mapped = response.documents.map((doc) => ({
         id: doc.document_id,

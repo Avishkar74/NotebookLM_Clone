@@ -1,7 +1,7 @@
 import json
 import logging
 from typing import Optional, Dict, Any
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Query
 from app.schemas.document import (
     DocumentUploadResponse, DocumentStatusResponse, DocumentListResponse, DocumentResponse
 )
@@ -82,8 +82,8 @@ async def upload_document(
     summary="List all documents",
     description="Retrieves a list of all documents currently tracked in the workspace."
 )
-async def list_documents():
-    return document_service.list_documents()
+async def list_documents(status: Optional[IngestionStatus] = Query(None)):
+    return document_service.list_documents(status=status)
 
 @router.get(
     "/{document_id}/status",

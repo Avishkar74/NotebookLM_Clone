@@ -13,9 +13,9 @@ export const DocumentsPanel: React.FC<DocumentsPanelProps> = ({
   onSelectDocument,
 }) => {
   return (
-    <aside className="w-80 border-r border-neutral-800 bg-neutral-950/20 flex flex-col shrink-0">
-      <div className="p-4 border-b border-neutral-800 shrink-0">
-        <h2 className="text-sm font-semibold tracking-wide uppercase text-neutral-400">
+    <aside className="w-80 rounded-3xl border border-slate-200 bg-white shadow-lg flex flex-col shrink-0 overflow-hidden min-h-0">
+      <div className="p-4 border-b border-slate-200 shrink-0 bg-slate-50/80">
+        <h2 className="text-sm font-semibold tracking-wide uppercase text-slate-600">
           Source Documents
         </h2>
       </div>

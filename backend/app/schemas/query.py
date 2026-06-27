@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, UTC
 
 class QueryOptions(BaseModel):
-    use_web_search: Optional[bool] = False
+    use_web_search: Optional[bool] = True
     include_confidence: Optional[bool] = True
     return_retrieved_chunks: Optional[bool] = True
 

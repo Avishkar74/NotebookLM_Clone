@@ -56,8 +56,12 @@ export const api = {
     return handleResponse<DocumentUploadResponse>(response);
   },
 
-  getDocuments: async (): Promise<DocumentListResponse> => {
-    const response = await fetch(`${API_BASE}/documents`);
+  getDocuments: async (status?: string): Promise<DocumentListResponse> => {
+    const url = new URL(`${API_BASE}/documents`);
+    if (status) {
+      url.searchParams.set("status", status);
+    }
+    const response = await fetch(url.toString());
     return handleResponse<DocumentListResponse>(response);
   },
 
@@ -74,14 +78,23 @@ export const api = {
   },
 
   // Query APIs
-  askQuestion: async (query: string, documentIds: string[], sessionId?: string): Promise<QueryResponseData> => {
+  askQuestion: async (
+    query: string,
+    documentIds: string[],
+    sessionId?: string,
+    options?: { use_web_search?: boolean; return_retrieved_chunks?: boolean }
+  ): Promise<QueryResponseData> => {
     const response = await fetch(`${API_BASE}/query/answer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ 
         query, 
         document_ids: documentIds,
-        session_id: sessionId 
+        session_id: sessionId,
+        options: {
+          use_web_search: options?.use_web_search ?? true,
+          return_retrieved_chunks: options?.return_retrieved_chunks ?? true
+        }
       }),
     });
     return handleResponse<QueryResponseData>(response);
