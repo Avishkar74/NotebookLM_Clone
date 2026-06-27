@@ -5,8 +5,22 @@ import type {
   QueryResponseData,
   TraceResponseData
 } from "../types";
+const getApiBase = (): string => {
+  const globalObj = typeof globalThis !== "undefined" ? globalThis : (typeof window !== "undefined" ? window : null);
+  const envUrl = 
+    (typeof import.meta.env !== "undefined" && (import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL)) ||
+    (globalObj && (globalObj as any).process?.env && ((globalObj as any).process.env.REACT_APP_API_BASE_URL || (globalObj as any).process.env.VITE_API_BASE_URL));
+    
+  if (envUrl) {
+    // Standardize URL to always end with /api
+    const cleaned = envUrl.trim().replace(/\/$/, "");
+    return cleaned.endsWith("/api") ? cleaned : `${cleaned}/api`;
+  }
+  // Default fallback to live Render backend API
+  return "https://crag-backend-o8lg.onrender.com/api";
+};
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000/api";
+const API_BASE = getApiBase();
 
 export class APIError extends Error {
   response: any;
