@@ -46,9 +46,12 @@ export const api = {
   },
 
   // Document Management APIs
-  uploadDocument: async (file: File): Promise<DocumentUploadResponse> => {
+  uploadDocument: async (file: File, sessionId?: string): Promise<DocumentUploadResponse> => {
     const formData = new FormData();
     formData.append("file", file);
+    if (sessionId) {
+      formData.append("session_id", sessionId);
+    }
     const response = await fetch(`${API_BASE}/documents/upload`, {
       method: "POST",
       body: formData,
@@ -56,8 +59,11 @@ export const api = {
     return handleResponse<DocumentUploadResponse>(response);
   },
 
-  getDocuments: async (status?: string): Promise<DocumentListResponse> => {
+  getDocuments: async (sessionId?: string, status?: string): Promise<DocumentListResponse> => {
     const url = new URL(`${API_BASE}/documents`);
+    if (sessionId) {
+      url.searchParams.set("session_id", sessionId);
+    }
     if (status) {
       url.searchParams.set("status", status);
     }
@@ -65,13 +71,21 @@ export const api = {
     return handleResponse<DocumentListResponse>(response);
   },
 
-  getDocumentStatus: async (documentId: string): Promise<DocumentStatusResponse> => {
-    const response = await fetch(`${API_BASE}/documents/${documentId}/status`);
+  getDocumentStatus: async (documentId: string, sessionId?: string): Promise<DocumentStatusResponse> => {
+    const url = new URL(`${API_BASE}/documents/${documentId}/status`);
+    if (sessionId) {
+      url.searchParams.set("session_id", sessionId);
+    }
+    const response = await fetch(url.toString());
     return handleResponse<DocumentStatusResponse>(response);
   },
 
-  deleteDocument: async (documentId: string): Promise<{ message: string }> => {
-    const response = await fetch(`${API_BASE}/documents/${documentId}`, {
+  deleteDocument: async (documentId: string, sessionId?: string): Promise<{ message: string }> => {
+    const url = new URL(`${API_BASE}/documents/${documentId}`);
+    if (sessionId) {
+      url.searchParams.set("session_id", sessionId);
+    }
+    const response = await fetch(url.toString(), {
       method: "DELETE",
     });
     return handleResponse<{ message: string }>(response);
@@ -104,5 +118,12 @@ export const api = {
   getExecutionTrace: async (traceId: string): Promise<TraceResponseData> => {
     const response = await fetch(`${API_BASE}/trace/${traceId}`);
     return handleResponse<TraceResponseData>(response);
+  },
+
+  pingSession: async (sessionId: string): Promise<{ status: string; session_id: string; timestamp: string }> => {
+    const url = new URL(`${API_BASE}/health/ping`);
+    url.searchParams.set("session_id", sessionId);
+    const response = await fetch(url.toString());
+    return handleResponse<{ status: string; session_id: string; timestamp: string }>(response);
   }
 };

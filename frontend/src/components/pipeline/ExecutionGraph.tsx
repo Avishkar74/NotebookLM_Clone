@@ -7,9 +7,6 @@ import {
   MarkerType,
   Position,
   ReactFlow,
-  useReactFlow,
-  useStore,
-  useViewport,
 } from "@xyflow/react";
 import type { Edge, Node, NodeProps } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -52,19 +49,6 @@ const BRANCH_TONES: Record<string, string> = {
   correct: "border-emerald-400 bg-emerald-50 text-emerald-800",
   ambiguous: "border-amber-400 bg-amber-50 text-amber-800",
   incorrect: "border-red-400 bg-red-50 text-red-800",
-};
-
-const minimapColors: Record<NodeStatus, { fill: string; stroke: string }> = {
-  SUCCESS: { fill: "#10b981", stroke: "#047857" },
-  RUNNING: { fill: "#3b82f6", stroke: "#1d4ed8" },
-  FAILED: { fill: "#ef4444", stroke: "#b91c1c" },
-  SKIPPED: { fill: "#cbd5e1", stroke: "#94a3b8" },
-  PENDING: { fill: "#94a3b8", stroke: "#64748b" },
-};
-
-const NODE_PREVIEW_SIZE: Record<string, { width: number; height: number }> = {
-  branch: { width: 134, height: 78 },
-  stage: { width: 176, height: 96 },
 };
 
 const CustomPipelineNode: React.FC<PipelineNodeProps> = ({ data, selected }) => {
@@ -120,186 +104,6 @@ const CustomPipelineNode: React.FC<PipelineNodeProps> = ({ data, selected }) => 
         />
       )}
     </div>
-  );
-};
-
-const GraphOverview: React.FC<{
-  nodes: PipelineNode[];
-  edges: Edge[];
-  activeEdgeIds: Set<string>;
-}> = ({ nodes, edges, activeEdgeIds }) => {
-  const { setCenter } = useReactFlow();
-  const { x, y, zoom } = useViewport();
-  const canvasWidth = useStore((state) => state.width || 1);
-  const canvasHeight = useStore((state) => state.height || 1);
-
-  const { scale, offsetX, offsetY, width, height } = useMemo(() => {
-    const padding = 24;
-    const previewBoxes = nodes.map((node) => {
-      const size = node.data.kind === "branch" ? NODE_PREVIEW_SIZE.branch : NODE_PREVIEW_SIZE.stage;
-      return {
-        id: node.id,
-        x: node.position.x,
-        y: node.position.y,
-        width: size.width,
-        height: size.height,
-        cx: node.position.x + size.width / 2,
-        cy: node.position.y + size.height / 2,
-        status: node.data.status,
-        label: node.data.displayName,
-        kind: node.data.kind,
-      };
-    });
-
-    const minX = Math.min(...previewBoxes.map((node) => node.x));
-    const minY = Math.min(...previewBoxes.map((node) => node.y));
-    const maxX = Math.max(...previewBoxes.map((node) => node.x + node.width));
-    const maxY = Math.max(...previewBoxes.map((node) => node.y + node.height));
-    const boundsWidth = Math.max(maxX - minX, 1);
-    const boundsHeight = Math.max(maxY - minY, 1);
-    const width = 180;
-    const height = 136;
-    const scale = Math.min((width - padding * 2) / boundsWidth, (height - padding * 2) / boundsHeight);
-
-    return {
-      scale,
-      offsetX: padding - minX * scale,
-      offsetY: padding - minY * scale,
-      width,
-      height,
-    };
-  }, [nodes]);
-
-  const viewportRect = useMemo(() => {
-    const viewLeft = -x / zoom;
-    const viewTop = -y / zoom;
-    const viewWidth = canvasWidth / zoom;
-    const viewHeight = canvasHeight / zoom;
-
-    return {
-      x: offsetX + viewLeft * scale,
-      y: offsetY + viewTop * scale,
-      width: viewWidth * scale,
-      height: viewHeight * scale,
-    };
-  }, [canvasHeight, canvasWidth, offsetX, offsetY, scale, x, y, zoom]);
-
-  return (
-    <button
-      type="button"
-      className="absolute bottom-3 right-3 z-10 rounded-xl border border-slate-200 bg-white/95 p-1.5 shadow-xl backdrop-blur-sm"
-      aria-label="Graph overview"
-      title="Click a node to focus it"
-    >
-      <svg
-        width={width}
-        height={height}
-        viewBox={`0 0 ${width} ${height}`}
-        className="block"
-        role="img"
-        aria-label="CRAG pipeline overview"
-        onClick={(event) => {
-          const rect = (event.currentTarget as SVGSVGElement).getBoundingClientRect();
-          const localX = event.clientX - rect.left;
-          const localY = event.clientY - rect.top;
-          const graphX = (localX - offsetX) / scale;
-          const graphY = (localY - offsetY) / scale;
-
-          const hit = nodes.find((node) => {
-            const size = node.data.kind === "branch" ? NODE_PREVIEW_SIZE.branch : NODE_PREVIEW_SIZE.stage;
-            return graphX >= node.position.x
-              && graphX <= node.position.x + size.width
-              && graphY >= node.position.y
-              && graphY <= node.position.y + size.height;
-          });
-
-          if (hit) {
-            const size = hit.data.kind === "branch" ? NODE_PREVIEW_SIZE.branch : NODE_PREVIEW_SIZE.stage;
-            setCenter(
-              hit.position.x + size.width / 2,
-              hit.position.y + size.height / 2,
-              { zoom: 1.1, duration: 500 }
-            );
-          }
-        }}
-      >
-        <defs>
-          <pattern id="overview-dots" width="10" height="10" patternUnits="userSpaceOnUse">
-            <circle cx="1" cy="1" r="0.7" fill="#e2e8f0" />
-          </pattern>
-        </defs>
-
-          <rect x="0" y="0" width={width} height={height} rx="12" fill="#f8fafc" />
-          <rect x="0" y="0" width={width} height={height} rx="16" fill="url(#overview-dots)" opacity="0.45" />
-
-        {edges.map((edge) => {
-          const source = nodes.find((node) => node.id === edge.source);
-          const target = nodes.find((node) => node.id === edge.target);
-          if (!source || !target) {
-            return null;
-          }
-
-              const sourceSize = source.data.kind === "branch" ? NODE_PREVIEW_SIZE.branch : NODE_PREVIEW_SIZE.stage;
-              const targetSize = target.data.kind === "branch" ? NODE_PREVIEW_SIZE.branch : NODE_PREVIEW_SIZE.stage;
-          const sourceX = offsetX + (source.position.x + sourceSize.width / 2) * scale;
-          const sourceY = offsetY + (source.position.y + sourceSize.height) * scale;
-          const targetX = offsetX + (target.position.x + targetSize.width / 2) * scale;
-          const targetY = offsetY + target.position.y * scale;
-          const midY = (sourceY + targetY) / 2;
-          const isActive = activeEdgeIds.has(edge.id);
-
-          return (
-            <path
-              key={edge.id}
-              d={`M ${sourceX} ${sourceY} C ${sourceX} ${midY}, ${targetX} ${midY}, ${targetX} ${targetY}`}
-              fill="none"
-              stroke={isActive ? "#2563eb" : "#94a3b8"}
-              strokeWidth={isActive ? 1.6 : 0.8}
-              strokeDasharray={isActive ? "0" : "4 3"}
-              opacity={isActive ? 0.95 : 0.55}
-            />
-          );
-        })}
-
-        {nodes.map((node) => {
-          const size = node.data.kind === "branch" ? NODE_PREVIEW_SIZE.branch : NODE_PREVIEW_SIZE.stage;
-          const fill = minimapColors[node.data.status].fill;
-          const stroke = minimapColors[node.data.status].stroke;
-          const xPos = offsetX + node.position.x * scale;
-          const yPos = offsetY + node.position.y * scale;
-
-          return (
-            <g key={node.id}>
-              <rect
-                x={xPos}
-                y={yPos}
-                width={size.width * scale}
-                height={size.height * scale}
-                rx={node.data.kind === "branch" ? 8 : 10}
-                fill={fill}
-                stroke={stroke}
-                strokeWidth={1}
-              />
-            </g>
-          );
-        })}
-
-        <rect
-          x={viewportRect.x}
-          y={viewportRect.y}
-          width={viewportRect.width}
-          height={viewportRect.height}
-          fill="rgba(37, 99, 235, 0.10)"
-          stroke="rgba(37, 99, 235, 0.95)"
-          strokeWidth="1.2"
-          rx="10"
-        />
-
-        <text x={16} y={height - 12} fontSize="9" fontWeight="700" fill="#64748b">
-          Overview
-        </text>
-      </svg>
-    </button>
   );
 };
 
@@ -573,7 +377,6 @@ export const ExecutionGraph = () => {
       >
         <Controls showInteractive={false} />
         <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="#cbd5e1" />
-        <GraphOverview nodes={nodes} edges={edges} activeEdgeIds={activeEdgeIds} />
       </ReactFlow>
     </div>
   );

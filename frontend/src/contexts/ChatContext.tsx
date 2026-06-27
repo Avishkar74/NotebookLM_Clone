@@ -1,7 +1,8 @@
-import React, { createContext, useState, useCallback } from "react";
+import React, { createContext, useState, useCallback, useEffect } from "react";
 import type { ReactNode } from "react";
 import type { Message } from "../types/domain";
 import { api } from "../services/api";
+import { getOrCreateSessionId } from "../utils/session";
 
 interface ChatContextType {
   messages: Message[];
@@ -19,6 +20,10 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [isLoading, setIsLoading] = useState(false);
   const [processingPhase, setProcessingPhase] = useState<"Retrieving..." | "Evaluating..." | "Generating..." | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getOrCreateSessionId();
+  }, []);
 
   const clearHistory = useCallback(() => {
     setMessages([]);
@@ -59,7 +64,8 @@ export const ChatProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     try {
       // 1. Post query to backend
-      const queryResult = await api.askQuestion(query, documentIds, undefined, {
+      const sessionId = getOrCreateSessionId();
+      const queryResult = await api.askQuestion(query, documentIds, sessionId, {
         use_web_search: true,
         return_retrieved_chunks: true,
       });

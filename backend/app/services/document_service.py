@@ -1,4 +1,3 @@
-import os
 import uuid
 import logging
 import asyncio
@@ -31,15 +30,10 @@ class DocumentService:
     def __init__(self):
         if self._initialized:
             return
-        
-        self.storage_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            "storage"
-        )
-        os.makedirs(self.storage_dir, exist_ok=True)
-        
+
         # In-memory document storage
         self.documents: Dict[str, Dict[str, Any]] = {}
+        self.session_last_activity: Dict[str, datetime] = {}
         
         # Async Queue for sequential ingestion
         self.queue = asyncio.Queue()
@@ -54,6 +48,7 @@ class DocumentService:
     def reset(self):
         """Resets service documents and recreates the asyncio Queue for the current loop."""
         self.documents.clear()
+        self.session_last_activity.clear()
         self.queue = asyncio.Queue()
         self.worker_task = None
 
@@ -94,10 +89,12 @@ class DocumentService:
             logger.error(f"Document {document_id} not found in state.")
             return
 
-        file_path = doc["file_path"]
+        file_content = doc.get("file_content")
         stages = doc["stages"]
+        session_id = doc.get("session_id") or "session_001"
 
         try:
+            self.touch_session(session_id)
             # --- 1. PARSING ---
             stages["PARSING"]["status"] = "IN_PROGRESS"
             doc["overall_status"] = IngestionStatus.PARSING
@@ -105,7 +102,7 @@ class DocumentService:
             start_time = time.time()
             
             logger.info(f"Parsing document {doc['filename']}")
-            pages = await asyncio.to_thread(DocumentLoader.load_file, file_path)
+            pages = await asyncio.to_thread(DocumentLoader.load_bytes, file_content or b"", doc["filename"])
             
             duration = time.time() - start_time
             stages["PARSING"]["status"] = "COMPLETED"
@@ -114,6 +111,7 @@ class DocumentService:
                 "pages": len(pages),
                 "text_length": sum(len(p.get("text", "")) for p in pages)
             }
+            self.touch_session(session_id)
             
             # --- 2. CHUNKING ---
             stages["CHUNKING"]["status"] = "IN_PROGRESS"
@@ -134,6 +132,7 @@ class DocumentService:
                 "chunk_size": self.chunker.chunk_size,
                 "overlap": self.chunker.chunk_overlap
             }
+            self.touch_session(session_id)
 
             # --- 3. EMBEDDING ---
             stages["EMBEDDING"]["status"] = "IN_PROGRESS"
@@ -156,6 +155,7 @@ class DocumentService:
                 "embedding_model": self.embedder.model,
                 "embeddings_created": len(embeddings)
             }
+            self.touch_session(session_id)
 
             # --- 4. STORING ---
             stages["STORING"]["status"] = "IN_PROGRESS"
@@ -184,6 +184,7 @@ class DocumentService:
             # Complete ingestion
             doc["overall_status"] = IngestionStatus.COMPLETED
             doc["updated_at"] = datetime.now(UTC)
+            self.touch_session(session_id)
             logger.info(f"Ingestion completed for document {doc['filename']}. Chunks: {len(chunks)}")
 
         except Exception as e:
@@ -196,36 +197,79 @@ class DocumentService:
                     break
             doc["overall_status"] = IngestionStatus.FAILED
             doc["updated_at"] = datetime.now(UTC)
+        finally:
+            # Never keep the raw upload bytes after ingestion has been attempted.
+            doc.pop("file_content", None)
 
     def _cleanup_failed_ingestion(self, document_id: str, doc: Dict[str, Any]):
         """Removes partially written artifacts while preserving the failed document record."""
-        file_path = doc.get("file_path")
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-                logger.info(f"Removed failed ingestion file for document {document_id}.")
-            except Exception as e:
-                logger.error(f"Error removing failed ingestion file {file_path}: {str(e)}")
-
         try:
             self.vector_service.delete_document(document_id)
         except Exception as e:
             logger.error(f"Error cleaning up vectors for failed document {document_id}: {str(e)}")
 
-    async def queue_document(self, filename: str, content: bytes, file_metadata: Optional[Dict[str, Any]] = None) -> DocumentResponse:
-        """Saves file to disk, initializes status, and adds it to the ingestion queue."""
+    def touch_session(self, session_id: Optional[str]):
+        if not session_id:
+            return
+        self.session_last_activity[session_id] = datetime.now(UTC)
+
+    def _session_has_active_documents(self, session_id: str) -> bool:
+        active_states = {
+            IngestionStatus.QUEUED,
+            IngestionStatus.PARSING,
+            IngestionStatus.CHUNKING,
+            IngestionStatus.EMBEDDING,
+            IngestionStatus.STORING,
+        }
+        return any(
+            doc.get("session_id") == session_id and doc.get("overall_status") in active_states
+            for doc in self.documents.values()
+        )
+
+    def cleanup_expired_sessions(self, session_ttl_minutes: int = 30) -> List[str]:
+        """Deletes inactive sessions and their derived data."""
+        now = datetime.now(UTC)
+        expired_sessions: List[str] = []
+        for session_id, last_activity in list(self.session_last_activity.items()):
+            age_minutes = (now - last_activity).total_seconds() / 60
+            if age_minutes < session_ttl_minutes:
+                continue
+            if self._session_has_active_documents(session_id):
+                continue
+
+            expired_sessions.append(session_id)
+            session_docs = [doc_id for doc_id, doc in self.documents.items() if doc.get("session_id") == session_id]
+            for doc_id in session_docs:
+                try:
+                    self.vector_service.delete_document(doc_id)
+                except Exception as e:
+                    logger.error(f"Error cleaning vectors for expired session document {doc_id}: {str(e)}")
+                self.documents.pop(doc_id, None)
+
+            self.session_last_activity.pop(session_id, None)
+            logger.info(f"Expired inactive session '{session_id}' and removed its derived data.")
+
+        return expired_sessions
+
+    async def queue_document(
+        self,
+        filename: str,
+        content: bytes,
+        file_metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None
+    ) -> DocumentResponse:
+        """Stores uploaded bytes in memory, initializes status, and adds it to the ingestion queue."""
         document_id = str(uuid.uuid4())
-        file_path = os.path.join(self.storage_dir, f"{document_id}_{filename}")
-        
-        # Write file to local storage synchronously
-        await asyncio.to_thread(self._write_file, file_path, content)
         file_size = len(content)
+        resolved_session_id = session_id or "session_001"
+        self.touch_session(resolved_session_id)
 
         # Initialize tracking state
         doc_state = {
             "document_id": document_id,
             "filename": filename,
-            "file_path": file_path,
+            "file_content": content,
+            "session_id": resolved_session_id,
             "file_size_bytes": file_size,
             "overall_status": IngestionStatus.QUEUED,
             "chunks_count": 0,
@@ -249,20 +293,18 @@ class DocumentService:
         
         return self._map_to_response(doc_state)
 
-    def _write_file(self, path: str, content: bytes):
-        with open(path, "wb") as f:
-            f.write(content)
-
-    def get_document(self, document_id: str) -> Optional[DocumentResponse]:
+    def get_document(self, document_id: str, session_id: Optional[str] = None) -> Optional[DocumentResponse]:
         doc = self.documents.get(document_id)
-        if doc:
+        if doc and (session_id is None or doc.get("session_id") == session_id):
+            self.touch_session(doc.get("session_id"))
             return self._map_to_response(doc)
         return None
 
-    def get_document_status(self, document_id: str) -> Optional[DocumentStatusResponse]:
+    def get_document_status(self, document_id: str, session_id: Optional[str] = None) -> Optional[DocumentStatusResponse]:
         doc = self.documents.get(document_id)
-        if not doc:
+        if not doc or (session_id is not None and doc.get("session_id") != session_id):
             return None
+        self.touch_session(doc.get("session_id"))
 
         # Build stages completed list
         stages_completed = []
@@ -317,8 +359,15 @@ class DocumentService:
             updated_at=doc["updated_at"]
         )
 
-    def list_documents(self, status: Optional[IngestionStatus] = None) -> DocumentListResponse:
+    def list_documents(
+        self,
+        status: Optional[IngestionStatus] = None,
+        session_id: Optional[str] = None
+    ) -> DocumentListResponse:
         docs = self.documents.values()
+        if session_id is not None:
+            docs = [doc for doc in docs if doc.get("session_id") == session_id]
+            self.touch_session(session_id)
         if status is not None:
             docs = [doc for doc in docs if doc["overall_status"] == status]
 
@@ -328,18 +377,12 @@ class DocumentService:
             total_count=len(docs_list)
         )
 
-    def delete_document(self, document_id: str) -> bool:
-        """Deletes a document from the system, removes its file from disk."""
+    def delete_document(self, document_id: str, session_id: Optional[str] = None) -> bool:
+        """Deletes a document from the system and removes its vectors from Qdrant."""
         doc = self.documents.get(document_id)
-        if not doc:
+        if not doc or (session_id is not None and doc.get("session_id") != session_id):
             return False
-
-        file_path = doc["file_path"]
-        if os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception as e:
-                logger.error(f"Error removing file {file_path}: {str(e)}")
+        self.touch_session(doc.get("session_id"))
 
         # Delete vectors from Qdrant
         try:
@@ -348,7 +391,7 @@ class DocumentService:
             logger.error(f"Error removing vectors for document {document_id}: {str(e)}")
 
         del self.documents[document_id]
-        logger.info(f"Deleted document {document_id} from memory, disk, and vector store.")
+        logger.info(f"Deleted document {document_id} from memory and vector store.")
         return True
 
     def _map_to_response(self, doc: Dict[str, Any]) -> DocumentResponse:

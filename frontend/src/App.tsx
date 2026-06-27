@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { GitBranch } from "lucide-react";
 import { DocumentsProvider } from "./contexts/DocumentsContext";
 import { ChatProvider } from "./contexts/ChatContext";
@@ -8,10 +8,36 @@ import { DocumentsPanel } from "./components/layout/DocumentsPanel";
 import { ChatPanel } from "./components/layout/ChatPanel";
 import { PipelinePanel } from "./components/layout/PipelinePanel";
 import { NodeOutputInspector } from "./components/inspector/NodeOutputInspector";
+import { api } from "./services/api";
+import { getOrCreateSessionId } from "./utils/session";
 
 function Dashboard() {
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
   const { loadTrace } = useExecution();
+  const sessionId = getOrCreateSessionId();
+
+  useEffect(() => {
+    let active = true;
+    const ping = async () => {
+      try {
+        await api.pingSession(sessionId);
+      } catch {
+        // Keepalive should be best-effort only.
+      }
+    };
+
+    void ping();
+    const interval = window.setInterval(() => {
+      if (active) {
+        void ping();
+      }
+    }, 10 * 60 * 1000);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [sessionId]);
 
   const handleSelectDocument = (id: string) => {
     setSelectedDocumentIds((prev) =>

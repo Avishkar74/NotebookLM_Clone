@@ -1,10 +1,8 @@
-import os
 import io
 import pytest
-import asyncio
 from datetime import datetime, UTC
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from app.main import app
 from app.services.document_service import DocumentService
 from app.config.constants import IngestionStatus
@@ -22,7 +20,7 @@ def test_upload_flow_and_status():
 
     # Create client with context manager to start lifespan background worker
     with TestClient(app) as client:
-        with patch("app.ingestion.loader.DocumentLoader.load_file", return_value=mock_pages) as mock_load, \
+        with patch("app.ingestion.loader.DocumentLoader.load_bytes", return_value=mock_pages) as mock_load, \
              patch("app.ingestion.chunker.TokenChunker.chunk_document", return_value=mock_chunks) as mock_chunk, \
              patch("app.ingestion.embedder.OpenAIEmbedder.embed_chunks", return_value=mock_embeddings) as mock_embed:
              
@@ -102,7 +100,6 @@ def test_list_documents_status_filter():
     service.documents["doc_completed"] = {
         "document_id": "doc_completed",
         "filename": "ready.pdf",
-        "file_path": "ready.pdf",
         "file_size_bytes": 123,
         "overall_status": IngestionStatus.COMPLETED,
         "chunks_count": 2,
@@ -116,7 +113,6 @@ def test_list_documents_status_filter():
     service.documents["doc_failed"] = {
         "document_id": "doc_failed",
         "filename": "failed.pdf",
-        "file_path": "failed.pdf",
         "file_size_bytes": 123,
         "overall_status": IngestionStatus.FAILED,
         "chunks_count": 0,

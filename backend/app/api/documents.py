@@ -21,7 +21,8 @@ document_service = DocumentService()
 )
 async def upload_document(
     file: UploadFile = File(...),
-    metadata: Optional[str] = Form(None)
+    metadata: Optional[str] = Form(None),
+    session_id: Optional[str] = Form(None)
 ):
     # Validate extension
     filename = file.filename or ""
@@ -54,7 +55,8 @@ async def upload_document(
         doc_resp = await document_service.queue_document(
             filename=filename,
             content=content,
-            file_metadata=parsed_metadata
+            file_metadata=parsed_metadata,
+            session_id=session_id
         )
 
         return DocumentUploadResponse(
@@ -82,8 +84,11 @@ async def upload_document(
     summary="List all documents",
     description="Retrieves a list of all documents currently tracked in the workspace."
 )
-async def list_documents(status: Optional[IngestionStatus] = Query(None)):
-    return document_service.list_documents(status=status)
+async def list_documents(
+    status: Optional[IngestionStatus] = Query(None),
+    session_id: Optional[str] = Query(None)
+):
+    return document_service.list_documents(status=status, session_id=session_id)
 
 @router.get(
     "/{document_id}/status",
@@ -91,8 +96,8 @@ async def list_documents(status: Optional[IngestionStatus] = Query(None)):
     summary="Get ingestion status",
     description="Retrieves the step-by-step progress and status of a document ingestion pipeline."
 )
-async def get_document_status(document_id: str):
-    status_resp = document_service.get_document_status(document_id)
+async def get_document_status(document_id: str, session_id: Optional[str] = Query(None)):
+    status_resp = document_service.get_document_status(document_id, session_id=session_id)
     if not status_resp:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -106,8 +111,8 @@ async def get_document_status(document_id: str):
     summary="Get document details",
     description="Retrieves primary details of a specific document."
 )
-async def get_document_details(document_id: str):
-    doc_resp = document_service.get_document(document_id)
+async def get_document_details(document_id: str, session_id: Optional[str] = Query(None)):
+    doc_resp = document_service.get_document(document_id, session_id=session_id)
     if not doc_resp:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -120,8 +125,8 @@ async def get_document_details(document_id: str):
     summary="Delete a document",
     description="Deletes document from workspace tracking and removes its local file from disk."
 )
-async def delete_document(document_id: str):
-    success = document_service.delete_document(document_id)
+async def delete_document(document_id: str, session_id: Optional[str] = Query(None)):
+    success = document_service.delete_document(document_id, session_id=session_id)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

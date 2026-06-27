@@ -10,6 +10,7 @@ from app.config.settings import settings
 from app.ingestion.embedder import OpenAIEmbedder
 from app.services.vector_service import VectorService
 from app.services.trace_service import TraceService
+from app.services.document_service import DocumentService
 from app.services.rag_nodes.evaluator_node import EvaluatorNode
 from app.services.rag_nodes.refinement_node import RefinementNode
 from app.services.rag_nodes.rewrite_node import RewriteNode
@@ -55,6 +56,7 @@ class RAGService:
         session_id = request.session_id if hasattr(request, "session_id") else None
         if not session_id:
             session_id = "session_001"
+        DocumentService().touch_session(session_id)
         
         # Start Trace tracking
         query_id = str(uuid.uuid4())

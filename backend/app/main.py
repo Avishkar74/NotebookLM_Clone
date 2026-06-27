@@ -7,6 +7,7 @@ from app.config.settings import settings
 from app.config.logging import setup_logging
 from app.api import health, documents, query, trace
 from app.services.document_service import DocumentService
+from app.services.trace_service import TraceService
 from app.repositories.vector_repository import VectorRepository
 import asyncio
 
@@ -25,9 +26,29 @@ async def lifespan(app: FastAPI):
 
     # Start sequential ingestion worker
     service = DocumentService()
+    trace_service = TraceService()
     service.start_worker()
+
+    async def session_cleanup_loop():
+        while True:
+            try:
+                expired_sessions = service.cleanup_expired_sessions(session_ttl_minutes=30)
+                for session_id in expired_sessions:
+                    trace_service.delete_session_traces(session_id)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Session cleanup loop error: {str(e)}")
+            await asyncio.sleep(300)
+
+    cleanup_task = asyncio.create_task(session_cleanup_loop())
     yield
     # Shutdown: Stop sequential ingestion worker
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     await service.stop_worker()
 
 def create_app() -> FastAPI:
@@ -81,4 +102,3 @@ def create_app() -> FastAPI:
     return app
 
 app = create_app()
-

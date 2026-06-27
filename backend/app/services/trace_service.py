@@ -19,3 +19,11 @@ class TraceService:
 
     def get_trace(self, trace_id: str) -> Optional[TraceResponseData]:
         return self.traces.get(trace_id)
+
+    def delete_session_traces(self, session_id: str):
+        """Removes all traces associated with an expired session."""
+        to_delete = [trace_id for trace_id, trace in self.traces.items() if trace.session_id == session_id]
+        for trace_id in to_delete:
+            self.traces.pop(trace_id, None)
+        if to_delete:
+            logger.info(f"Deleted {len(to_delete)} trace(s) for expired session '{session_id}'")

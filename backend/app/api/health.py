@@ -1,12 +1,14 @@
 import time
 from datetime import datetime, UTC
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from typing import Dict, Any
 from app.config.settings import settings
 import httpx
 from qdrant_client import QdrantClient
+from app.services.document_service import DocumentService
 
 router = APIRouter()
+document_service = DocumentService()
 
 async def check_openai() -> Dict[str, Any]:
     start_time = time.time()
@@ -82,6 +84,15 @@ async def health_check():
             "qdrant_db": qdrant_res["status"],
             "web_search": tavily_res["status"]
         }
+    }
+
+@router.get("/health/ping")
+async def health_ping(session_id: str = Query(...)):
+    document_service.touch_session(session_id)
+    return {
+        "status": "ok",
+        "session_id": session_id,
+        "timestamp": datetime.now(UTC).replace(tzinfo=None).isoformat() + "Z"
     }
 
 @router.get("/health/ready")

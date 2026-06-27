@@ -2,6 +2,7 @@ import React, { createContext, useState, useEffect, useCallback } from "react";
 import type { ReactNode } from "react";
 import type { Document, UploadingDocument } from "../types/domain";
 import { api } from "../services/api";
+import { getOrCreateSessionId } from "../utils/session";
 
 interface DocumentsContextType {
   documents: Document[];
@@ -21,12 +22,13 @@ export const DocumentsProvider: React.FC<{ children: ReactNode }> = ({ children 
   const [uploadQueue, setUploadQueue] = useState<UploadingDocument[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const sessionId = getOrCreateSessionId();
 
   const fetchDocuments = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await api.getDocuments("COMPLETED");
+      const response = await api.getDocuments(sessionId, "COMPLETED");
       // Map API document structures to UI document model
       const mapped = response.documents.map((doc) => ({
         id: doc.document_id,
@@ -44,17 +46,17 @@ export const DocumentsProvider: React.FC<{ children: ReactNode }> = ({ children 
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [sessionId]);
 
   const deleteDocument = useCallback(async (id: string) => {
     setError(null);
     try {
-      await api.deleteDocument(id);
+      await api.deleteDocument(id, sessionId);
       setDocuments((prev) => prev.filter((d) => d.id !== id));
     } catch (err: any) {
       setError(err.message || "Failed to delete document");
     }
-  }, []);
+  }, [sessionId]);
 
   const clearUploadQueue = useCallback(() => {
     setUploadQueue([]);
@@ -64,7 +66,7 @@ export const DocumentsProvider: React.FC<{ children: ReactNode }> = ({ children 
   const pollDocumentStatus = useCallback((docId: string) => {
     const interval = setInterval(async () => {
       try {
-        const statusData = await api.getDocumentStatus(docId);
+        const statusData = await api.getDocumentStatus(docId, sessionId);
         
         setUploadQueue((prevQueue) => {
           const fileIndex = prevQueue.findIndex((d) => d.id === docId);
@@ -136,7 +138,7 @@ export const DocumentsProvider: React.FC<{ children: ReactNode }> = ({ children 
 
       try {
         // 2. Call upload API
-        const response = await api.uploadDocument(file);
+        const response = await api.uploadDocument(file, sessionId);
         const actualId = response.document_id;
 
         // 3. Update the temporary ID to the actual ID in state
@@ -158,7 +160,7 @@ export const DocumentsProvider: React.FC<{ children: ReactNode }> = ({ children 
         );
       }
     }
-  }, [pollDocumentStatus]);
+  }, [pollDocumentStatus, sessionId]);
 
   // Initial load
   useEffect(() => {
