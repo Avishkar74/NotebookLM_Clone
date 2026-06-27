@@ -70,6 +70,7 @@ VITE_API_URL=http://localhost:8000/api
 ```
 
 For production deployment, set `VITE_API_URL` to your Render backend API URL.
+The frontend should point to the deployed backend only, and the browser keeps just a session id in `sessionStorage`.
 
 ---
 
@@ -100,7 +101,7 @@ To run the application locally, follow these instructions:
 5. Configure the `backend/.env` file.
 6. Start the FastAPI development server:
    ```bash
-   uvicorn app.main:main --reload
+   uvicorn app.main:app --reload
    ```
 
 ### Frontend Setup:

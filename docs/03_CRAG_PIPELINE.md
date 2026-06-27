@@ -91,12 +91,12 @@ def retrieve(query: str, k: int = 4) -> RetrievalOutput:
     query_embedding = embed(query)  # 3072-dim vector
     
     # 2. Search Qdrant
-    results = qdrant_client.search(
+    results = qdrant_client.query_points(
         collection_name=current_collection,
-        query_vector=query_embedding,
+        query=query_embedding,
         limit=k,
         score_threshold=0.0
-    )
+    ).points
     
     # 3. Format output with metadata
     documents = []

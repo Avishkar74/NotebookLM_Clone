@@ -9,7 +9,7 @@
 The CRAG system consists of three major layers:
 
 1. **Frontend Layer**: React/Vite SPA served on Netlify
-2. **Backend Layer**: FastAPI microservices on Render
+2. **Backend Layer**: FastAPI services on Render
 3. **External Services**: OpenAI API, Qdrant vector DB, web search API
 
 All communication is asynchronous with structured JSON payloads.
@@ -42,7 +42,7 @@ All communication is asynchronous with structured JSON payloads.
 │  │                REST Endpoints                          │   │
 │  │  /api/documents/upload       POST                      │   │
 │  │  /api/documents/status       GET                       │   │
-│  │  /api/documents/list         GET                       │   │
+│  │  /api/documents               GET                       │   │
 │  │  /api/query/answer           POST                      │   │
 │  │  /api/trace/execution        GET                       │   │
 │  └────────────────────────────────────────────────────────┘   │
@@ -64,7 +64,7 @@ All communication is asynchronous with structured JSON payloads.
 │  ┌────────────────────────────────────────────────────────┐   │
 │  │              Storage & Caching Layer                   │   │
 │  │  ┌────────────────────────────────────────────────────┐│   │
-│  │  │ Local file system (uploads during session)        ││   │
+│  │  │ Session-scoped in-memory upload queue              ││   │
 │  │  │ In-memory trace cache (session-scoped)            ││   │
 │  │  └────────────────────────────────────────────────────┘│   │
 │  └────────────────────────────────────────────────────────┘   │
@@ -157,7 +157,7 @@ All endpoints return structured JSON responses with execution traces.
 | Method | Endpoint | Purpose | Response Time |
 |--------|----------|---------|---|
 | POST | `/api/documents/upload` | Upload PDF/TXT file | 30s (includes ingestion) |
-| GET | `/api/documents/list` | Get uploaded documents | <1s |
+| GET | `/api/documents` | Get uploaded documents | <1s |
 | GET | `/api/documents/{id}/status` | Get ingestion status | <1s |
 | POST | `/api/query/answer` | Submit question + get answer | <10s |
 | GET | `/api/trace/{trace_id}` | Retrieve execution trace | <1s |
